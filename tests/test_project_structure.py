@@ -12,6 +12,7 @@ EXPECTED_PATHS = [
     "README.md",
     "product_prd.md",
     "recommendation.md",
+    "DEMO_CHECKLIST.md",
     "requirements.txt",
     ".gitignore",
     "src/__init__.py",
