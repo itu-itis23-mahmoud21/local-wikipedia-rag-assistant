@@ -3,7 +3,11 @@
 import unittest
 
 from src.query_router import ROUTE_BOTH, ROUTE_PERSON, ROUTE_PLACE, ROUTE_UNKNOWN
-from src.retriever import RAGRetriever, RetrievedContext
+from src.retriever import (
+    RAGRetriever,
+    RetrievedContext,
+    deduplicate_retrieved_overlaps,
+)
 from src.vector_store import VectorSearchResult
 
 
@@ -111,6 +115,18 @@ class FakeVectorStore:
 
 class TestRAGRetriever(unittest.TestCase):
     """Tests for routed retrieval."""
+
+    OVERLAP_PREVIOUS = (
+        "Albert Einstein moved to Switzerland at the age of seventeen, he enrolled "
+        "in the mathematics and physics teaching diploma program at the Swiss "
+        "federal polytechnic school in Zurich, graduating in 1900."
+    )
+    OVERLAP_CURRENT = (
+        "seventeen, he enrolled in the mathematics and physics teaching diploma "
+        "program at the Swiss federal polytechnic school in Zurich, graduating "
+        "in 1900.\n\nHe acquired Swiss citizenship a year later and worked at "
+        "the patent office in Bern."
+    )
 
     def test_retrieve_person_query_applies_person_filter(self) -> None:
         """Exact person queries should filter by type and entity name."""
@@ -305,4 +321,115 @@ class TestRAGRetriever(unittest.TestCase):
         self.assertEqual(
             [result.vector_id for result in context.results[:2]],
             ["chunk-intro-einstein", "chunk-intro-tesla"],
+        )
+
+    def test_overlap_cleanup_removes_same_entity_repeated_prefix(self) -> None:
+        """Same-entity overlap should be removed from later result text."""
+
+        results = deduplicate_retrieved_overlaps(
+            [
+                self._result("chunk-1", self.OVERLAP_PREVIOUS, "Albert Einstein"),
+                self._result("chunk-2", self.OVERLAP_CURRENT, "Albert Einstein"),
+            ]
+        )
+
+        self.assertEqual(results[1].vector_id, "chunk-2")
+        self.assertEqual(results[1].metadata["entity"], "Albert Einstein")
+        self.assertIsNone(results[1].distance)
+        self.assertTrue(results[1].text.startswith("He acquired Swiss citizenship"))
+        self.assertNotIn("seventeen, he enrolled", results[1].text[:40])
+
+    def test_overlap_cleanup_does_not_cross_entities(self) -> None:
+        """Overlap cleanup should not compare chunks from different entities."""
+
+        results = deduplicate_retrieved_overlaps(
+            [
+                self._result("chunk-1", self.OVERLAP_PREVIOUS, "Albert Einstein"),
+                self._result("chunk-2", self.OVERLAP_CURRENT, "Nikola Tesla"),
+            ]
+        )
+
+        self.assertEqual(results[1].text, self.OVERLAP_CURRENT)
+
+    def test_overlap_cleanup_keeps_text_when_overlap_is_too_small(self) -> None:
+        """Small overlaps should not be trimmed."""
+
+        previous = "Albert Einstein studied physics in Zurich."
+        current = "physics in Zurich. He later developed theories."
+
+        results = deduplicate_retrieved_overlaps(
+            [
+                self._result("chunk-1", previous, "Albert Einstein"),
+                self._result("chunk-2", current, "Albert Einstein"),
+            ]
+        )
+
+        self.assertEqual(results[1].text, current)
+
+    def test_overlap_cleanup_keeps_original_if_cleaned_text_is_too_short(self) -> None:
+        """Cleanup should avoid removing all useful text from a result."""
+
+        text = "one two three four five six seven eight nine ten"
+
+        results = deduplicate_retrieved_overlaps(
+            [
+                self._result("chunk-1", text, "Albert Einstein"),
+                self._result("chunk-2", text, "Albert Einstein"),
+            ]
+        )
+
+        self.assertEqual(results[1].text, text)
+
+    def test_retrieve_returns_cleaned_overlap_text(self) -> None:
+        """RetrievedContext should contain overlap-cleaned result text."""
+
+        vector_store = FakeVectorStore()
+        vector_store.intro_results = [
+            self._result("chunk-intro-einstein", self.OVERLAP_PREVIOUS, "Albert Einstein")
+        ]
+        vector_store.results = [
+            self._result("chunk-overlap-einstein", self.OVERLAP_CURRENT, "Albert Einstein")
+        ]
+        retriever = RAGRetriever(vector_store=vector_store)
+
+        context = retriever.retrieve("Who was Albert Einstein?", top_k=2)
+
+        self.assertTrue(context.results[1].text.startswith("He acquired"))
+
+    def test_source_summary_uses_cleaned_result_preview(self) -> None:
+        """Source summaries should preview cleaned result text after retrieval."""
+
+        vector_store = FakeVectorStore()
+        vector_store.intro_results = [
+            self._result("chunk-intro-einstein", self.OVERLAP_PREVIOUS, "Albert Einstein")
+        ]
+        vector_store.results = [
+            self._result("chunk-overlap-einstein", self.OVERLAP_CURRENT, "Albert Einstein")
+        ]
+        retriever = RAGRetriever(vector_store=vector_store)
+
+        context = retriever.retrieve("Who was Albert Einstein?", top_k=2)
+        summary = retriever.get_source_summary(context.results)
+
+        self.assertTrue(summary[1]["preview"].startswith("He acquired"))
+
+    def _result(
+        self,
+        vector_id: str,
+        text: str,
+        entity: str,
+        distance: float | None = None,
+    ) -> VectorSearchResult:
+        """Build a representative search result for overlap-cleanup tests."""
+
+        return VectorSearchResult(
+            vector_id=vector_id,
+            text=text,
+            metadata={
+                "chunk_id": vector_id,
+                "entity": entity,
+                "entity_type": "person",
+                "source_url": "https://example.test/source",
+            },
+            distance=distance,
         )

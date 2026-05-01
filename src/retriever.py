@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 from src import config
 from src.query_router import (
@@ -13,6 +14,11 @@ from src.query_router import (
     route_query,
 )
 from src.vector_store import ChromaVectorStore, VectorSearchResult
+
+
+_OVERLAP_WORD_PATTERN = re.compile(r"\w+", re.UNICODE)
+_MIN_OVERLAP_WORDS = 8
+_MIN_CLEANED_WORDS = 4
 
 
 @dataclass(frozen=True)
@@ -69,6 +75,7 @@ class RAGRetriever:
             entity_names=entity_name_filter,
         )
         results = _merge_results(intro_results, semantic_results, effective_top_k)
+        results = deduplicate_retrieved_overlaps(results)
 
         return RetrievedContext(query=query, route=route, results=results)
 
@@ -137,6 +144,42 @@ def retrieve_context(query: str) -> list[dict]:
     return retriever.get_source_summary(context.results)
 
 
+def deduplicate_retrieved_overlaps(
+    results: list[VectorSearchResult],
+) -> list[VectorSearchResult]:
+    """Remove repeated overlap prefixes from retrieved chunks for display/LLM context."""
+
+    cleaned_results: list[VectorSearchResult] = []
+
+    for result in results:
+        cleaned_text = result.text
+        current_entity = _entity_key(result)
+
+        if current_entity:
+            for previous_result in reversed(cleaned_results):
+                if _entity_key(previous_result) != current_entity:
+                    continue
+
+                candidate_text = _remove_repeated_prefix(
+                    previous_result.text,
+                    cleaned_text,
+                )
+                if candidate_text != cleaned_text:
+                    cleaned_text = candidate_text
+                    break
+
+        cleaned_results.append(
+            VectorSearchResult(
+                vector_id=result.vector_id,
+                text=cleaned_text,
+                metadata=result.metadata,
+                distance=result.distance,
+            )
+        )
+
+    return cleaned_results
+
+
 def _entity_type_filter_for_route(route: QueryRoute) -> str | None:
     """Return a Chroma metadata filter value for a routing decision."""
 
@@ -181,6 +224,52 @@ def _merge_results(
             break
 
     return merged_results
+
+
+def _entity_key(result: VectorSearchResult) -> str:
+    """Return a normalized entity key for same-entity overlap cleanup."""
+
+    entity = result.metadata.get("entity")
+    return str(entity or "").strip().casefold()
+
+
+def _remove_repeated_prefix(previous_text: str, current_text: str) -> str:
+    """Remove a repeated word-overlap prefix from current_text when safe."""
+
+    prefix_end = _find_word_overlap_prefix(previous_text, current_text)
+    if prefix_end <= 0:
+        return current_text
+
+    cleaned_text = current_text[prefix_end:].lstrip(" \t\r\n.,;:!?)]}")
+    if len(_word_tokens_for_overlap(cleaned_text)) < _MIN_CLEANED_WORDS:
+        return current_text
+
+    return cleaned_text.strip()
+
+
+def _find_word_overlap_prefix(previous_text: str, current_text: str) -> int:
+    """Return the character offset after a repeated current-text prefix."""
+
+    previous_tokens = _word_tokens_for_overlap(previous_text)
+    current_tokens = _word_tokens_for_overlap(current_text)
+    max_overlap = min(len(previous_tokens), len(current_tokens))
+
+    for word_count in range(max_overlap, _MIN_OVERLAP_WORDS - 1, -1):
+        previous_suffix = [token for token, _, _ in previous_tokens[-word_count:]]
+        current_prefix = [token for token, _, _ in current_tokens[:word_count]]
+        if previous_suffix == current_prefix:
+            return current_tokens[word_count - 1][2]
+
+    return 0
+
+
+def _word_tokens_for_overlap(text: str) -> list[tuple[str, int, int]]:
+    """Return normalized word tokens with original character spans."""
+
+    return [
+        (match.group(0).casefold(), match.start(), match.end())
+        for match in _OVERLAP_WORD_PATTERN.finditer(text)
+    ]
 
 
 def _preview_text(text: str, max_chars: int = 160) -> str:
