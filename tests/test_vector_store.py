@@ -73,6 +73,29 @@ class FakeCollection:
             "distances": [[0.1 for _ in items]],
         }
 
+    def get(
+        self,
+        where: dict | None = None,
+        include: list[str] | None = None,
+    ) -> dict:
+        """Return stored items in insertion order, optionally metadata-filtered."""
+
+        del include
+        self.last_where = where
+        items = list(self.items.items())
+        if where:
+            items = [
+                item
+                for item in items
+                if self._matches_where(item[1]["metadata"], where)
+            ]
+
+        return {
+            "ids": [item_id for item_id, _ in items],
+            "documents": [item["document"] for _, item in items],
+            "metadatas": [item["metadata"] for _, item in items],
+        }
+
     def _matches_where(self, metadata: dict, where: dict) -> bool:
         """Apply a small subset of Chroma where filtering for tests."""
 
@@ -340,6 +363,108 @@ class TestChromaVectorStore(unittest.TestCase):
         self.assertEqual(store.collection.last_where, {"entity_type": "person"})
         self.assertEqual(len(results), 1)
 
+    def test_get_intro_chunks_returns_first_chunk_for_one_entity(self) -> None:
+        """get_intro_chunks should return the lowest chunk_index for an entity."""
+
+        with patch("src.vector_store.chromadb", self.fake_chromadb):
+            store = self._make_store()
+            store.add_chunk(
+                self._chunk(id=1, text="Later Einstein text", chunk_index=3),
+                self._document(),
+                self._entity(name="Albert Einstein"),
+                embedding=[0.1, 0.2],
+            )
+            store.add_chunk(
+                self._chunk(id=2, text="Intro Einstein text", chunk_index=0),
+                self._document(),
+                self._entity(name="Albert Einstein"),
+                embedding=[0.3, 0.4],
+            )
+            results = store.get_intro_chunks(["Albert Einstein"])
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].vector_id, "chunk-2")
+        self.assertEqual(results[0].metadata["chunk_index"], 0)
+        self.assertIsNone(results[0].distance)
+
+    def test_get_intro_chunks_returns_one_chunk_per_entity(self) -> None:
+        """get_intro_chunks should include one intro chunk for each entity."""
+
+        with patch("src.vector_store.chromadb", self.fake_chromadb):
+            store = self._make_store()
+            store.add_chunk(
+                self._chunk(id=1, text="Einstein intro", chunk_index=0),
+                self._document(),
+                self._entity(name="Albert Einstein"),
+                embedding=[0.1, 0.2],
+            )
+            store.add_chunk(
+                self._chunk(id=2, text="Einstein later", chunk_index=1),
+                self._document(),
+                self._entity(name="Albert Einstein"),
+                embedding=[0.3, 0.4],
+            )
+            store.add_chunk(
+                self._chunk(id=3, text="Tesla intro", chunk_index=0),
+                self._document(),
+                self._entity(name="Nikola Tesla"),
+                embedding=[0.5, 0.6],
+            )
+            results = store.get_intro_chunks(["Nikola Tesla", "Albert Einstein"])
+
+        self.assertEqual(
+            [result.metadata["entity"] for result in results],
+            ["Albert Einstein", "Nikola Tesla"],
+        )
+        self.assertEqual([result.metadata["chunk_index"] for result in results], [0, 0])
+
+    def test_get_intro_chunks_respects_entity_type(self) -> None:
+        """get_intro_chunks should apply entity_type when provided."""
+
+        with patch("src.vector_store.chromadb", self.fake_chromadb):
+            store = self._make_store()
+            store.add_chunk(
+                self._chunk(id=1, text="Person entity", chunk_index=0),
+                self._document(),
+                self._entity(name="Eiffel Tower", entity_type="person"),
+                embedding=[0.1, 0.2],
+            )
+            store.add_chunk(
+                self._chunk(id=2, text="Place entity", chunk_index=0),
+                self._document(),
+                self._entity(name="Eiffel Tower", entity_type="place"),
+                embedding=[0.3, 0.4],
+            )
+            results = store.get_intro_chunks(
+                ["Eiffel Tower"],
+                entity_type="place",
+            )
+
+        self.assertEqual(
+            store.collection.last_where,
+            {"$and": [{"entity_type": "place"}, {"entity": "Eiffel Tower"}]},
+        )
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].metadata["entity_type"], "place")
+
+    def test_get_intro_chunks_rejects_invalid_per_entity(self) -> None:
+        """per_entity must be positive."""
+
+        with patch("src.vector_store.chromadb", self.fake_chromadb):
+            store = self._make_store()
+
+        with self.assertRaises(ValueError):
+            store.get_intro_chunks(["Albert Einstein"], per_entity=0)
+
+    def test_get_intro_chunks_returns_empty_for_blank_entity_names(self) -> None:
+        """Blank or missing entity names should not query Chroma."""
+
+        with patch("src.vector_store.chromadb", self.fake_chromadb):
+            store = self._make_store()
+
+        self.assertEqual(store.get_intro_chunks([]), [])
+        self.assertEqual(store.get_intro_chunks([" ", ""]), [])
+
     def test_search_rejects_blank_query(self) -> None:
         """Blank query text should be rejected."""
 
@@ -444,6 +569,7 @@ class TestChromaVectorStore(unittest.TestCase):
         self,
         id: int = 1,
         text: str = "Albert Einstein was a physicist.",
+        chunk_index: int = 0,
     ) -> dict:
         """Return a representative chunk row."""
 
@@ -451,7 +577,7 @@ class TestChromaVectorStore(unittest.TestCase):
             "id": id,
             "document_id": 2,
             "entity_id": 3,
-            "chunk_index": 0,
+            "chunk_index": chunk_index,
             "text": text,
         }
 

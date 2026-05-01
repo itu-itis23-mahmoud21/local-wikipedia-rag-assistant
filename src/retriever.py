@@ -54,12 +54,21 @@ class RAGRetriever:
         route = route_query(query)
         entity_type_filter = _entity_type_filter_for_route(route)
         entity_name_filter = _entity_names_for_route(route)
-        results = self.vector_store.search(
+        intro_results = []
+        if entity_name_filter:
+            intro_results = self.vector_store.get_intro_chunks(
+                entity_name_filter,
+                per_entity=1,
+                entity_type=entity_type_filter,
+            )
+
+        semantic_results = self.vector_store.search(
             query,
             top_k=effective_top_k,
             entity_type=entity_type_filter,
             entity_names=entity_name_filter,
         )
+        results = _merge_results(intro_results, semantic_results, effective_top_k)
 
         return RetrievedContext(query=query, route=route, results=results)
 
@@ -151,6 +160,27 @@ def _entity_names_for_route(route: QueryRoute) -> list[str] | None:
         matched_entities = [*route.matched_people, *route.matched_places]
         return matched_entities or None
     return None
+
+
+def _merge_results(
+    intro_results: list[VectorSearchResult],
+    semantic_results: list[VectorSearchResult],
+    limit: int,
+) -> list[VectorSearchResult]:
+    """Merge intro chunks before semantic chunks, de-duplicating by vector id."""
+
+    merged_results: list[VectorSearchResult] = []
+    seen_vector_ids: set[str] = set()
+
+    for result in [*intro_results, *semantic_results]:
+        if result.vector_id in seen_vector_ids:
+            continue
+        merged_results.append(result)
+        seen_vector_ids.add(result.vector_id)
+        if len(merged_results) >= limit:
+            break
+
+    return merged_results
 
 
 def _preview_text(text: str, max_chars: int = 160) -> str:

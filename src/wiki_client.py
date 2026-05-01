@@ -19,6 +19,17 @@ DEFAULT_USER_AGENT = (
     "LocalWikipediaRAGAssistant/1.0 "
     "(AI Aided Computer Engineering HW3)"
 )
+UNWANTED_SECTION_HEADINGS = {
+    "see also",
+    "notes",
+    "references",
+    "works cited",
+    "further reading",
+    "external links",
+    "bibliography",
+    "sources",
+    "citations",
+}
 
 
 @dataclass(frozen=True)
@@ -190,9 +201,10 @@ def safe_filename(name: str) -> str:
 
 
 def normalize_wikipedia_text(text: str) -> str:
-    """Normalize line endings and collapse excessive blank lines."""
+    """Normalize line endings, remove footers, and collapse blank lines."""
 
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = remove_unwanted_wikipedia_sections(normalized)
     output_lines: list[str] = []
     previous_blank = False
 
@@ -208,6 +220,21 @@ def normalize_wikipedia_text(text: str) -> str:
         previous_blank = False
 
     return "\n".join(output_lines).strip()
+
+
+def remove_unwanted_wikipedia_sections(text: str) -> str:
+    """Remove trailing Wikipedia footer/reference sections from plain text."""
+
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    kept_lines: list[str] = []
+
+    for line in normalized.split("\n"):
+        clean_line = line.strip()
+        if clean_line.casefold() in UNWANTED_SECTION_HEADINGS:
+            break
+        kept_lines.append(line)
+
+    return "\n".join(kept_lines).strip()
 
 
 def write_text_file(path: Path, text: str) -> None:

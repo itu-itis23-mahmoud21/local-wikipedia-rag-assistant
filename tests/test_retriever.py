@@ -12,15 +12,17 @@ class FakeVectorStore:
 
     def __init__(self) -> None:
         self.calls: list[dict] = []
+        self.intro_calls: list[dict] = []
         self.results = [
             VectorSearchResult(
                 vector_id="chunk-1",
-                text="Albert Einstein was a physicist.",
+                text="Later Albert Einstein context.",
                 metadata={
                     "chunk_id": 1,
                     "entity": "Albert Einstein",
                     "entity_type": "person",
                     "source_url": "https://example.test/einstein",
+                    "chunk_index": 2,
                 },
                 distance=0.12,
             ),
@@ -32,8 +34,35 @@ class FakeVectorStore:
                     "entity": "Nikola Tesla",
                     "entity_type": "person",
                     "source_url": "https://example.test/tesla",
+                    "chunk_index": 2,
                 },
                 distance=0.25,
+            ),
+        ]
+        self.intro_results = [
+            VectorSearchResult(
+                vector_id="chunk-intro-einstein",
+                text="Albert Einstein was a German-born theoretical physicist.",
+                metadata={
+                    "chunk_id": 10,
+                    "entity": "Albert Einstein",
+                    "entity_type": "person",
+                    "source_url": "https://example.test/einstein",
+                    "chunk_index": 0,
+                },
+                distance=None,
+            ),
+            VectorSearchResult(
+                vector_id="chunk-intro-tesla",
+                text="Nikola Tesla was an inventor and electrical engineer.",
+                metadata={
+                    "chunk_id": 20,
+                    "entity": "Nikola Tesla",
+                    "entity_type": "person",
+                    "source_url": "https://example.test/tesla",
+                    "chunk_index": 0,
+                },
+                distance=None,
             ),
         ]
 
@@ -56,6 +85,29 @@ class FakeVectorStore:
         )
         return self.results[:top_k]
 
+    def get_intro_chunks(
+        self,
+        entity_names: list[str],
+        per_entity: int = 1,
+        entity_type: str | None = None,
+    ) -> list[VectorSearchResult]:
+        """Record intro-chunk parameters and return matching fake intro chunks."""
+
+        self.intro_calls.append(
+            {
+                "entity_names": entity_names,
+                "per_entity": per_entity,
+                "entity_type": entity_type,
+            }
+        )
+        allowed_names = {name.casefold() for name in entity_names}
+        results = [
+            result
+            for result in self.intro_results
+            if str(result.metadata.get("entity", "")).casefold() in allowed_names
+        ]
+        return results[: max(0, per_entity * len(allowed_names))]
+
 
 class TestRAGRetriever(unittest.TestCase):
     """Tests for routed retrieval."""
@@ -71,11 +123,33 @@ class TestRAGRetriever(unittest.TestCase):
         self.assertEqual(context.route.route, ROUTE_PERSON)
         self.assertEqual(vector_store.calls[0]["entity_type"], "person")
         self.assertEqual(vector_store.calls[0]["entity_names"], ["Albert Einstein"])
+        self.assertEqual(
+            vector_store.intro_calls[0],
+            {
+                "entity_names": ["Albert Einstein"],
+                "per_entity": 1,
+                "entity_type": "person",
+            },
+        )
 
     def test_retrieve_place_query_applies_place_filter(self) -> None:
         """Exact place queries should filter by type and entity name."""
 
         vector_store = FakeVectorStore()
+        vector_store.intro_results = [
+            VectorSearchResult(
+                vector_id="chunk-intro-eiffel",
+                text="The Eiffel Tower is a landmark in Paris.",
+                metadata={
+                    "chunk_id": 30,
+                    "entity": "Eiffel Tower",
+                    "entity_type": "place",
+                    "source_url": "https://example.test/eiffel",
+                    "chunk_index": 0,
+                },
+                distance=None,
+            )
+        ]
         retriever = RAGRetriever(vector_store=vector_store)
 
         context = retriever.retrieve("Where is the Eiffel Tower located?")
@@ -83,6 +157,7 @@ class TestRAGRetriever(unittest.TestCase):
         self.assertEqual(context.route.route, ROUTE_PLACE)
         self.assertEqual(vector_store.calls[0]["entity_type"], "place")
         self.assertEqual(vector_store.calls[0]["entity_names"], ["Eiffel Tower"])
+        self.assertEqual(vector_store.intro_calls[0]["entity_type"], "place")
 
     def test_retrieve_both_query_applies_no_filter(self) -> None:
         """Comparison queries should filter to the mentioned entities."""
@@ -98,6 +173,11 @@ class TestRAGRetriever(unittest.TestCase):
             vector_store.calls[0]["entity_names"],
             ["Albert Einstein", "Nikola Tesla"],
         )
+        self.assertEqual(
+            vector_store.intro_calls[0]["entity_names"],
+            ["Albert Einstein", "Nikola Tesla"],
+        )
+        self.assertIsNone(vector_store.intro_calls[0]["entity_type"])
 
     def test_keyword_only_person_query_keeps_type_filter_only(self) -> None:
         """Person keyword queries without exact names should use type only."""
@@ -110,6 +190,7 @@ class TestRAGRetriever(unittest.TestCase):
         self.assertEqual(context.route.route, ROUTE_PERSON)
         self.assertEqual(vector_store.calls[0]["entity_type"], "person")
         self.assertIsNone(vector_store.calls[0]["entity_names"])
+        self.assertEqual(vector_store.intro_calls, [])
 
     def test_retrieve_unknown_query_applies_no_filter(self) -> None:
         """Unknown-routed queries should search without entity_type filter."""
@@ -122,6 +203,7 @@ class TestRAGRetriever(unittest.TestCase):
         self.assertEqual(context.route.route, ROUTE_UNKNOWN)
         self.assertIsNone(vector_store.calls[0]["entity_type"])
         self.assertIsNone(vector_store.calls[0]["entity_names"])
+        self.assertEqual(vector_store.intro_calls, [])
 
     def test_retrieve_rejects_invalid_top_k(self) -> None:
         """top_k must be positive."""
@@ -141,7 +223,7 @@ class TestRAGRetriever(unittest.TestCase):
         self.assertIn("entity=Albert Einstein", context)
         self.assertIn("type=person", context)
         self.assertIn("https://example.test/einstein", context)
-        self.assertIn("Albert Einstein was a physicist.", context)
+        self.assertIn("Later Albert Einstein context.", context)
 
     def test_format_context_respects_max_chars(self) -> None:
         """format_context should stop before exceeding max_chars."""
@@ -187,3 +269,40 @@ class TestRAGRetriever(unittest.TestCase):
         self.assertEqual(context.query, "What did Albert Einstein discover?")
         self.assertEqual(context.route.route, ROUTE_PERSON)
         self.assertEqual(len(context.results), 1)
+
+    def test_exact_entity_query_places_intro_chunk_first(self) -> None:
+        """Exact entity retrieval should prepend the intro chunk."""
+
+        retriever = RAGRetriever(vector_store=FakeVectorStore())
+
+        context = retriever.retrieve("Who was Albert Einstein?", top_k=3)
+
+        self.assertEqual(context.results[0].vector_id, "chunk-intro-einstein")
+        self.assertIn("German-born theoretical physicist", context.results[0].text)
+        self.assertIsNone(context.results[0].distance)
+
+    def test_exact_entity_query_deduplicates_intro_and_semantic_results(self) -> None:
+        """Intro chunks should not be duplicated if semantic search returns them."""
+
+        vector_store = FakeVectorStore()
+        vector_store.intro_results = [vector_store.results[0]]
+        retriever = RAGRetriever(vector_store=vector_store)
+
+        context = retriever.retrieve("Who was Albert Einstein?", top_k=3)
+
+        self.assertEqual(
+            [result.vector_id for result in context.results],
+            ["chunk-1", "chunk-2"],
+        )
+
+    def test_comparison_query_includes_intro_chunks_for_both_entities(self) -> None:
+        """Comparison retrieval should include one intro chunk per matched entity."""
+
+        retriever = RAGRetriever(vector_store=FakeVectorStore())
+
+        context = retriever.retrieve("Compare Albert Einstein and Nikola Tesla", top_k=4)
+
+        self.assertEqual(
+            [result.vector_id for result in context.results[:2]],
+            ["chunk-intro-einstein", "chunk-intro-tesla"],
+        )

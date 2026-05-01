@@ -14,6 +14,7 @@ from src.wiki_client import (
     build_wikipedia_page_url,
     normalize_wikipedia_text,
     read_text_file,
+    remove_unwanted_wikipedia_sections,
     safe_filename,
     write_text_file,
 )
@@ -38,6 +39,57 @@ class TestWikipediaHelpers(unittest.TestCase):
 
         self.assertEqual(normalized, "First line\n\nSecond line\n\nThird line")
         self.assertNotIn("\r", normalized)
+
+    def test_normalize_wikipedia_text_removes_references_section(self) -> None:
+        """Standalone References should remove trailing footer content."""
+
+        text = "Intro paragraph.\n\nReferences\nReference item"
+
+        normalized = normalize_wikipedia_text(text)
+
+        self.assertEqual(normalized, "Intro paragraph.")
+        self.assertNotIn("Reference item", normalized)
+
+    def test_normalize_wikipedia_text_removes_see_also_section(self) -> None:
+        """Standalone See also should remove trailing footer content."""
+
+        text = "Main article text.\n\nSee also\nRelated page"
+
+        normalized = normalize_wikipedia_text(text)
+
+        self.assertEqual(normalized, "Main article text.")
+        self.assertNotIn("Related page", normalized)
+
+    def test_normalize_wikipedia_text_removes_common_footer_headings(self) -> None:
+        """Common standalone footer headings should be removed."""
+
+        for heading in ["Works cited", "Further reading", "External links"]:
+            with self.subTest(heading=heading):
+                text = f"Useful article text.\n\n{heading}\nFooter content"
+
+                normalized = normalize_wikipedia_text(text)
+
+                self.assertEqual(normalized, "Useful article text.")
+                self.assertNotIn("Footer content", normalized)
+
+    def test_normalize_wikipedia_text_keeps_sentence_with_references_word(self) -> None:
+        """Only standalone headings should trigger footer removal."""
+
+        text = "The article references earlier experiments.\n\nSecond paragraph."
+
+        normalized = normalize_wikipedia_text(text)
+
+        self.assertIn("references earlier experiments", normalized)
+        self.assertIn("Second paragraph.", normalized)
+
+    def test_remove_unwanted_wikipedia_sections_is_case_insensitive(self) -> None:
+        """Footer heading matching should ignore case."""
+
+        text = "Article text.\n\nrEfErEnCeS\nFooter content"
+
+        cleaned = remove_unwanted_wikipedia_sections(text)
+
+        self.assertEqual(cleaned, "Article text.")
 
     def test_write_and_read_text_file_roundtrip_utf8(self) -> None:
         """Text helpers should roundtrip UTF-8 content."""

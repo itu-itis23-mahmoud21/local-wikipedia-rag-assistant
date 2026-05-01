@@ -208,6 +208,58 @@ class ChromaVectorStore:
 
         return _parse_search_results(result)
 
+    def get_intro_chunks(
+        self,
+        entity_names: list[str],
+        per_entity: int = 1,
+        entity_type: str | None = None,
+    ) -> list[VectorSearchResult]:
+        """Return the first stored chunk(s) for exact entity mentions."""
+
+        if per_entity <= 0:
+            raise ValueError("per_entity must be positive.")
+        if entity_type is not None and entity_type not in ENTITY_TYPES:
+            allowed = ", ".join(ENTITY_TYPES)
+            raise ValueError(f"entity_type must be one of: {allowed}.")
+
+        clean_entity_names = _normalize_entity_names(entity_names)
+        if not clean_entity_names:
+            return []
+
+        where = _build_where_filter(entity_type, clean_entity_names)
+
+        try:
+            result = self.collection.get(
+                where=where,
+                include=["documents", "metadatas"],
+            )
+        except Exception as exc:
+            raise VectorStoreError(
+                f"Failed to get intro chunks from Chroma collection: {exc}"
+            ) from exc
+
+        results = _parse_get_results(result)
+        results.sort(key=_intro_sort_key)
+
+        selected_results: list[VectorSearchResult] = []
+        selected_counts: dict[str, int] = {}
+        allowed_names = {name.casefold() for name in clean_entity_names}
+
+        for result in results:
+            entity_name = str(result.metadata.get("entity") or "")
+            if entity_name.casefold() not in allowed_names:
+                continue
+
+            entity_key = entity_name.casefold()
+            current_count = selected_counts.get(entity_key, 0)
+            if current_count >= per_entity:
+                continue
+
+            selected_results.append(result)
+            selected_counts[entity_key] = current_count + 1
+
+        return selected_results
+
     def count(self) -> int:
         """Return the number of items in the Chroma collection."""
 
@@ -290,6 +342,40 @@ def _parse_search_results(result: dict) -> list[VectorSearchResult]:
         )
 
     return search_results
+
+
+def _parse_get_results(result: dict) -> list[VectorSearchResult]:
+    """Parse Chroma get output into VectorSearchResult objects."""
+
+    ids = _first_result_list(result.get("ids"))
+    documents = _first_result_list(result.get("documents"))
+    metadatas = _first_result_list(result.get("metadatas"))
+
+    get_results: list[VectorSearchResult] = []
+    for index, vector_id in enumerate(ids):
+        text = documents[index] if index < len(documents) else ""
+        metadata = metadatas[index] if index < len(metadatas) else {}
+        get_results.append(
+            VectorSearchResult(
+                vector_id=str(vector_id),
+                text=str(text or ""),
+                metadata=dict(metadata or {}),
+                distance=None,
+            )
+        )
+
+    return get_results
+
+
+def _intro_sort_key(result: VectorSearchResult) -> tuple[str, int]:
+    """Sort intro candidates by entity name and chunk index."""
+
+    entity_name = str(result.metadata.get("entity") or "").casefold()
+    try:
+        chunk_index = int(result.metadata.get("chunk_index", 0))
+    except (TypeError, ValueError):
+        chunk_index = 0
+    return (entity_name, chunk_index)
 
 
 def _first_result_list(value: object) -> list:
