@@ -6,8 +6,12 @@ import unittest
 from app import (
     answer_to_chat_message,
     build_stopped_message,
+    build_chat_export_text,
     error_to_chat_message,
     finish_generation_if_ready,
+    format_context_for_copy,
+    format_sources_for_copy,
+    get_export_filename,
     get_system_status,
     handle_user_query,
     initialize_session_state,
@@ -182,6 +186,44 @@ class TestAppHelpers(unittest.TestCase):
         self.assertEqual(source["chunk_id"], 7)
         self.assertEqual(source["distance"], 0.2)
         self.assertEqual(source["preview"], "Preview text")
+
+    def test_format_sources_for_copy_includes_expected_fields(self) -> None:
+        """Source copy text should include all displayed source fields."""
+
+        text = format_sources_for_copy(
+            [
+                {
+                    "rank": 1,
+                    "entity": "Albert Einstein",
+                    "entity_type": "person",
+                    "source_url": "https://example.test/einstein",
+                    "chunk_id": 7,
+                    "distance": 0.2,
+                    "preview": "Preview text",
+                }
+            ]
+        )
+
+        self.assertIn("Source 1", text)
+        self.assertIn("Albert Einstein", text)
+        self.assertIn("person", text)
+        self.assertIn("https://example.test/einstein", text)
+        self.assertIn("Chunk ID: 7", text)
+        self.assertIn("Distance: 0.2", text)
+        self.assertIn("Preview text", text)
+
+    def test_format_sources_for_copy_handles_empty_sources(self) -> None:
+        """Empty source lists should produce a clear copy string."""
+
+        self.assertEqual(
+            format_sources_for_copy([]),
+            "No retrieved sources available.",
+        )
+
+    def test_format_context_for_copy_strips_context(self) -> None:
+        """Context copy text should be stripped safely."""
+
+        self.assertEqual(format_context_for_copy("  Context text. \n"), "Context text.")
 
     def test_answer_to_chat_message_converts_generated_answer(self) -> None:
         """GeneratedAnswer should become an assistant chat message."""
@@ -402,6 +444,106 @@ class TestAppHelpers(unittest.TestCase):
         self.assertEqual(message["sources"], [])
         self.assertTrue(message["stopped"])
 
+    def test_build_chat_export_text_includes_assistant_answers(self) -> None:
+        """Chat export should always include assistant answers."""
+
+        export_text = build_chat_export_text(
+            _sample_messages(),
+            include_user_questions=False,
+            include_answers=False,
+        )
+
+        self.assertIn("Assistant answer:", export_text)
+        self.assertIn("Albert Einstein was a physicist.", export_text)
+
+    def test_build_chat_export_text_includes_user_questions_when_selected(self) -> None:
+        """Chat export should include user messages when requested."""
+
+        export_text = build_chat_export_text(
+            _sample_messages(),
+            include_user_questions=True,
+        )
+
+        self.assertIn("User question:", export_text)
+        self.assertIn("Who was Albert Einstein?", export_text)
+
+    def test_build_chat_export_text_excludes_user_questions_when_not_selected(self) -> None:
+        """Chat export should omit user messages when not requested."""
+
+        export_text = build_chat_export_text(
+            _sample_messages(),
+            include_user_questions=False,
+        )
+
+        self.assertNotIn("User question:", export_text)
+        self.assertNotIn("Who was Albert Einstein?", export_text)
+        self.assertIn("Albert Einstein was a physicist.", export_text)
+
+    def test_build_chat_export_text_includes_sources_only_when_selected(self) -> None:
+        """Retrieved sources should be controlled by the export option."""
+
+        without_sources = build_chat_export_text(
+            _sample_messages(),
+            include_sources=False,
+        )
+        with_sources = build_chat_export_text(
+            _sample_messages(),
+            include_sources=True,
+        )
+
+        self.assertNotIn("Retrieved sources:", without_sources)
+        self.assertIn("Retrieved sources:", with_sources)
+        self.assertIn("Chunk ID: 7", with_sources)
+
+    def test_build_chat_export_text_includes_context_only_when_selected(self) -> None:
+        """Retrieved context should be controlled by the export option."""
+
+        without_context = build_chat_export_text(
+            _sample_messages(),
+            include_context=False,
+        )
+        with_context = build_chat_export_text(
+            _sample_messages(),
+            include_context=True,
+        )
+
+        self.assertNotIn("Retrieved context used:", without_context)
+        self.assertIn("Retrieved context used:", with_context)
+        self.assertIn("Einstein context.", with_context)
+
+    def test_build_chat_export_text_includes_metadata_only_when_selected(self) -> None:
+        """Route/model metadata should be controlled by the export option."""
+
+        without_metadata = build_chat_export_text(
+            _sample_messages(),
+            include_metadata=False,
+        )
+        with_metadata = build_chat_export_text(
+            _sample_messages(),
+            include_metadata=True,
+        )
+
+        self.assertNotIn("Metadata:", without_metadata)
+        self.assertIn("Metadata:", with_metadata)
+        self.assertIn("Route: person", with_metadata)
+        self.assertIn(config.OLLAMA_GENERATION_MODEL, with_metadata)
+
+    def test_build_chat_export_text_handles_empty_chat_history(self) -> None:
+        """Empty chat exports should still produce a readable TXT body."""
+
+        export_text = build_chat_export_text([])
+
+        self.assertIn("Local Wikipedia RAG Assistant Chat Export", export_text)
+        self.assertIn("No chat messages are available.", export_text)
+
+    def test_get_export_filename_returns_txt_filename(self) -> None:
+        """Export filename should be a .txt file."""
+
+        filename = get_export_filename()
+
+        self.assertTrue(filename.endswith(".txt"))
+        self.assertIn("chat_export", filename)
+
 
 def _assistant_message(content: str) -> dict:
     """Build a representative assistant chat message for app tests."""
@@ -415,3 +557,30 @@ def _assistant_message(content: str) -> dict:
         "model": config.OLLAMA_GENERATION_MODEL,
         "error": False,
     }
+
+
+def _sample_messages() -> list[dict]:
+    """Return representative chat messages for export tests."""
+
+    return [
+        {"role": "user", "content": "Who was Albert Einstein?"},
+        {
+            "role": "assistant",
+            "content": "Albert Einstein was a physicist.",
+            "route": "person",
+            "sources": [
+                {
+                    "rank": 1,
+                    "entity": "Albert Einstein",
+                    "entity_type": "person",
+                    "source_url": "https://example.test/einstein",
+                    "chunk_id": 7,
+                    "distance": 0.2,
+                    "preview": "Preview text",
+                }
+            ],
+            "context": "Einstein context.",
+            "model": config.OLLAMA_GENERATION_MODEL,
+            "error": False,
+        },
+    ]

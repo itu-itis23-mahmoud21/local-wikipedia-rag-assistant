@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import MutableMapping
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
+import html
+import json
 import time
 from typing import Any
 from uuid import uuid4
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from src import config
 from src.database import MetadataDB
@@ -24,6 +27,7 @@ APP_CAPTION = (
 STOPPED_MESSAGE = "Generation stopped by user."
 GENERATION_STATUS_TEXT = "Searching local Wikipedia context and generating answer..."
 GENERATION_POLL_SECONDS = 0.5
+EXPORT_FILENAME = "local_wikipedia_rag_chat_export.txt"
 
 
 def initialize_session_state(session_state: MutableMapping[str, Any] | None = None) -> None:
@@ -106,6 +110,124 @@ def normalize_source(source: dict) -> dict:
         "distance": source.get("distance"),
         "preview": source.get("preview") or "",
     }
+
+
+def format_sources_for_copy(sources: list[dict]) -> str:
+    """Format retrieved source metadata as copyable plain text."""
+
+    if not sources:
+        return "No retrieved sources available."
+
+    sections: list[str] = []
+    for source in sources:
+        normalized = normalize_source(source)
+        sections.append(
+            "\n".join(
+                [
+                    f"Source {normalized['rank']}",
+                    f"Entity: {normalized['entity'] or 'Not available'}",
+                    f"Type: {normalized['entity_type'] or 'Not available'}",
+                    f"URL: {normalized['source_url'] or 'Not available'}",
+                    f"Chunk ID: {normalized['chunk_id']}",
+                    f"Distance: {normalized['distance']}",
+                    f"Preview: {normalized['preview']}",
+                ]
+            ).strip()
+        )
+
+    return "\n\n".join(sections).strip()
+
+
+def format_context_for_copy(context: str) -> str:
+    """Format retrieved context as copyable plain text."""
+
+    return str(context or "").strip()
+
+
+def build_chat_export_text(
+    messages: list[dict],
+    include_user_questions: bool = True,
+    include_answers: bool = True,
+    include_sources: bool = False,
+    include_context: bool = False,
+    include_metadata: bool = False,
+) -> str:
+    """Build a readable TXT export of the chat history."""
+
+    del include_answers  # Answers are mandatory and always included.
+
+    header = "Local Wikipedia RAG Assistant Chat Export"
+    if not messages:
+        return f"{header}\n\nNo chat messages are available."
+
+    sections: list[str] = []
+    for message in messages:
+        role = message.get("role")
+
+        if role == "user":
+            if not include_user_questions:
+                continue
+            section_parts = [
+                "User question:",
+                str(message.get("content") or "").strip(),
+            ]
+        elif role == "assistant":
+            section_parts = [
+                "Assistant answer:",
+                str(message.get("content") or "").strip(),
+            ]
+
+            if include_sources and message.get("sources"):
+                section_parts.extend(
+                    [
+                        "",
+                        "Retrieved sources:",
+                        format_sources_for_copy(message.get("sources", [])),
+                    ]
+                )
+
+            if include_context and message.get("context"):
+                section_parts.extend(
+                    [
+                        "",
+                        "Retrieved context used:",
+                        format_context_for_copy(message.get("context", "")),
+                    ]
+                )
+        else:
+            continue
+
+        if include_metadata:
+            section_parts.extend(["", "Metadata:", _format_message_metadata(message)])
+
+        sections.append("\n".join(section_parts).strip())
+
+    if not sections:
+        return f"{header}\n\nNo chat messages are available."
+
+    separator = "\n\n" + ("-" * 60) + "\n\n"
+    return f"{header}\n\n{separator.join(sections)}".strip()
+
+
+def get_export_filename() -> str:
+    """Return the default TXT filename for chat export."""
+
+    return EXPORT_FILENAME
+
+
+def _format_message_metadata(message: dict) -> str:
+    """Format optional message metadata for TXT export."""
+
+    metadata_lines = [f"Role: {message.get('role', '')}"]
+    if "route" in message:
+        metadata_lines.append(f"Route: {message.get('route')}")
+    if "model" in message:
+        metadata_lines.append(f"Model: {message.get('model')}")
+    if "error" in message:
+        metadata_lines.append(f"Error: {message.get('error')}")
+    if "stopped" in message:
+        metadata_lines.append(f"Stopped: {message.get('stopped')}")
+    return "\n".join(metadata_lines)
 
 
 def answer_to_chat_message(answer: GeneratedAnswer) -> dict:
@@ -254,6 +376,50 @@ def finish_generation_if_ready(
     return True
 
 
+def render_copy_button(label: str, text: str, key: str) -> None:
+    """Render a small browser clipboard copy button."""
+
+    copy_text = str(text or "")
+    if not copy_text:
+        return
+
+    safe_key = "".join(character if character.isalnum() else "_" for character in key)
+    if not safe_key:
+        safe_key = uuid4().hex
+    button_id = f"copy_button_{safe_key}"
+    status_id = f"copy_status_{safe_key}"
+    label_html = html.escape(label)
+
+    component_html = f"""
+    <div style="display:flex; align-items:center; gap:0.5rem; font-family:sans-serif;">
+      <button id="{button_id}" type="button"
+        style="padding:0.35rem 0.65rem; border:1px solid #d0d7de; border-radius:6px;
+        background:#f6f8fa; cursor:pointer;">
+        {label_html}
+      </button>
+      <span id="{status_id}" style="font-size:0.85rem; color:#57606a;"></span>
+    </div>
+    <script>
+    const copyButton = document.getElementById({json.dumps(button_id)});
+    const copyStatus = document.getElementById({json.dumps(status_id)});
+    const copyText = {json.dumps(copy_text)};
+    copyButton.addEventListener("click", async () => {{
+      if (!navigator.clipboard) {{
+        copyStatus.textContent = "Clipboard unavailable";
+        return;
+      }}
+      try {{
+        await navigator.clipboard.writeText(copyText);
+        copyStatus.textContent = "Copied";
+      }} catch (error) {{
+        copyStatus.textContent = "Copy unavailable";
+      }}
+    }});
+    </script>
+    """
+    components.html(component_html, height=44)
+
+
 def render_sidebar(status: dict) -> None:
     """Render the status sidebar."""
 
@@ -295,27 +461,83 @@ def render_sidebar(status: dict) -> None:
         _clear_generation_state(st.session_state, stop_requested=False)
         st.rerun()
 
+    render_chat_export_panel()
+
+
+def render_chat_export_panel() -> None:
+    """Render a sidebar export panel for downloading chat history."""
+
+    popover = getattr(st.sidebar, "popover", None)
+    if popover is not None:
+        with popover("Export chat"):
+            _render_chat_export_options()
+    else:
+        with st.sidebar.expander("Export chat"):
+            _render_chat_export_options()
+
+
+def _render_chat_export_options() -> None:
+    """Render export checkboxes and TXT download button."""
+
+    st.checkbox("Answers", value=True, disabled=True, key="export_include_answers")
+    include_user_questions = st.checkbox(
+        "User questions",
+        value=True,
+        key="export_include_user_questions",
+    )
+    include_sources = st.checkbox(
+        "Retrieved sources",
+        value=False,
+        key="export_include_sources",
+    )
+    include_context = st.checkbox(
+        "Retrieved context used",
+        value=False,
+        key="export_include_context",
+    )
+    include_metadata = st.checkbox(
+        "Metadata",
+        value=False,
+        key="export_include_metadata",
+    )
+
+    export_text = build_chat_export_text(
+        st.session_state.get("messages", []),
+        include_user_questions=include_user_questions,
+        include_answers=True,
+        include_sources=include_sources,
+        include_context=include_context,
+        include_metadata=include_metadata,
+    )
+    st.download_button(
+        "Download TXT",
+        data=export_text,
+        file_name=get_export_filename(),
+        mime="text/plain",
+    )
+
 
 def render_chat_history() -> None:
     """Render messages stored in session state."""
 
-    for message in st.session_state["messages"]:
+    for index, message in enumerate(st.session_state["messages"]):
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
             if message.get("role") == "assistant":
                 if message.get("route"):
                     st.caption(f"Route: {message['route']} | Model: {message['model']}")
-                render_sources(message.get("sources", []))
-                render_context(message.get("context", ""))
+                render_sources(message.get("sources", []), key=f"sources_{index}")
+                render_context(message.get("context", ""), key=f"context_{index}")
 
 
-def render_sources(sources: list[dict]) -> None:
+def render_sources(sources: list[dict], key: str = "sources") -> None:
     """Render retrieved source metadata for an assistant answer."""
 
     if not sources:
         return
 
     with st.expander("Retrieved sources"):
+        render_copy_button("Copy sources", format_sources_for_copy(sources), key)
         for source in sources:
             normalized = normalize_source(source)
             st.markdown(
@@ -328,13 +550,14 @@ def render_sources(sources: list[dict]) -> None:
             st.caption(normalized["preview"])
 
 
-def render_context(context: str) -> None:
+def render_context(context: str, key: str = "context") -> None:
     """Render the retrieved context used by the generator."""
 
     if not context:
         return
 
     with st.expander("Retrieved context used"):
+        render_copy_button("Copy context", format_context_for_copy(context), key)
         st.text(context)
 
 
