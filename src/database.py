@@ -408,6 +408,25 @@ class MetadataDB:
 
         return [_row_to_dict(row) for row in rows]
 
+    def delete_chunks(self, document_id: int | None = None) -> int:
+        """Delete chunks globally or for one document and return rows deleted."""
+
+        with closing(self.connect()) as connection:
+            if document_id is None:
+                cursor = connection.execute("DELETE FROM chunks;")
+            else:
+                cursor = connection.execute(
+                    """
+                    DELETE FROM chunks
+                    WHERE document_id = ?;
+                    """,
+                    (document_id,),
+                )
+            deleted_count = int(cursor.rowcount)
+            connection.commit()
+
+        return deleted_count
+
     def start_ingestion_run(
         self,
         total_entities: int,

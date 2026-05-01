@@ -173,6 +173,52 @@ class TestMetadataDB(unittest.TestCase):
         self.assertEqual(len(chunks_for_second_entity), 1)
         self.assertEqual(chunks_for_second_entity[0]["text"], "third")
 
+    def test_delete_chunks_for_document_deletes_only_that_document(self) -> None:
+        """delete_chunks(document_id) should leave other document chunks intact."""
+
+        first_entity_id, first_document_id = self._create_entity_and_document()
+        second_entity_id = self.db.upsert_entity("Grand Canyon", "place")
+        second_document_id = self.db.create_document(
+            second_entity_id,
+            "Grand Canyon",
+            None,
+            None,
+            None,
+            "success",
+        )
+        self.db.add_chunk(first_document_id, first_entity_id, 0, "first")
+        self.db.add_chunk(first_document_id, first_entity_id, 1, "second")
+        self.db.add_chunk(second_document_id, second_entity_id, 0, "third")
+
+        deleted_count = self.db.delete_chunks(first_document_id)
+
+        self.assertEqual(deleted_count, 2)
+        self.assertEqual(self.db.list_chunks(document_id=first_document_id), [])
+        remaining_chunks = self.db.list_chunks(document_id=second_document_id)
+        self.assertEqual(len(remaining_chunks), 1)
+        self.assertEqual(remaining_chunks[0]["text"], "third")
+
+    def test_delete_chunks_without_document_deletes_all_chunks(self) -> None:
+        """delete_chunks() should clear all chunk rows."""
+
+        first_entity_id, first_document_id = self._create_entity_and_document()
+        second_entity_id = self.db.upsert_entity("Grand Canyon", "place")
+        second_document_id = self.db.create_document(
+            second_entity_id,
+            "Grand Canyon",
+            None,
+            None,
+            None,
+            "success",
+        )
+        self.db.add_chunk(first_document_id, first_entity_id, 0, "first")
+        self.db.add_chunk(second_document_id, second_entity_id, 0, "second")
+
+        deleted_count = self.db.delete_chunks()
+
+        self.assertEqual(deleted_count, 2)
+        self.assertEqual(self.db.list_chunks(), [])
+
     def test_ingestion_run_start_and_finish_work(self) -> None:
         """Ingestion run lifecycle metadata should persist."""
 

@@ -27,6 +27,7 @@ EXPECTED_PATHS = [
     "src/generator.py",
     "src/utils.py",
     "scripts/ingest_wikipedia.py",
+    "scripts/chunk_documents.py",
     "scripts/build_vector_store.py",
     "scripts/setup_all.py",
     "scripts/reset_system.py",
