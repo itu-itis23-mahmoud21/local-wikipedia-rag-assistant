@@ -11,6 +11,7 @@ from src.wiki_client import (
     WikipediaClient,
     WikipediaClientError,
     WikipediaPageNotFoundError,
+    build_wikipedia_page_url,
     normalize_wikipedia_text,
     read_text_file,
     safe_filename,
@@ -49,6 +50,35 @@ class TestWikipediaHelpers(unittest.TestCase):
             result = read_text_file(path)
 
         self.assertEqual(result, text)
+
+    def test_build_wikipedia_page_url_for_albert_einstein(self) -> None:
+        """Wikipedia URL builder should use underscores for spaces."""
+
+        self.assertEqual(
+            build_wikipedia_page_url("Albert Einstein"),
+            "https://en.wikipedia.org/wiki/Albert_Einstein",
+        )
+
+    def test_build_wikipedia_page_url_for_j_k_rowling(self) -> None:
+        """Wikipedia URL builder should preserve safe title punctuation."""
+
+        url = build_wikipedia_page_url("J. K. Rowling")
+
+        self.assertIn("J._K._Rowling", url)
+
+    def test_build_wikipedia_page_url_for_unicode_title(self) -> None:
+        """Wikipedia URL builder should encode non-ASCII titles."""
+
+        url = build_wikipedia_page_url("Sagrada Fam\u00edlia")
+
+        self.assertTrue(url)
+        self.assertTrue(url.startswith("https://en.wikipedia.org/wiki/"))
+
+    def test_build_wikipedia_page_url_rejects_blank_title(self) -> None:
+        """Wikipedia URL builder should reject blank titles."""
+
+        with self.assertRaises(ValueError):
+            build_wikipedia_page_url("  ")
 
 
 class TestWikipediaClient(unittest.TestCase):

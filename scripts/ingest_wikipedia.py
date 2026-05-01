@@ -17,6 +17,7 @@ from src.entities import get_people, get_places
 from src.wiki_client import (
     WikipediaClient,
     WikipediaClientError,
+    build_wikipedia_page_url,
     normalize_wikipedia_text,
     safe_filename,
     write_text_file,
@@ -104,10 +105,16 @@ def main() -> None:
             existing_source_url = existing_entity["source_url"]
 
         if processed_path.exists() and not args.force:
+            source_url = existing_source_url or build_wikipedia_page_url(entity_name)
+            entity_id = db.upsert_entity(
+                entity_name,
+                entity_type,
+                source_url=source_url,
+            )
             db.create_document(
                 entity_id=entity_id,
                 title=entity_name,
-                source_url=existing_source_url,
+                source_url=source_url,
                 raw_path=str(raw_path) if raw_path.exists() else None,
                 processed_path=str(processed_path),
                 status="success",

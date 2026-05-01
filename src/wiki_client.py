@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import re
+from urllib.parse import quote
 
 import requests
 
@@ -157,6 +158,18 @@ def fetch_wikipedia_page(title: str) -> WikipediaPage:
     """Fetch a Wikipedia page using the default client."""
 
     return WikipediaClient().fetch_page(title)
+
+
+def build_wikipedia_page_url(title: str) -> str:
+    """Build a normal English Wikipedia page URL for a title."""
+
+    clean_title = title.strip()
+    if not clean_title:
+        raise ValueError("title must not be blank.")
+
+    page_title = clean_title.replace(" ", "_")
+    encoded_title = quote(page_title, safe="._-()")
+    return f"https://en.wikipedia.org/wiki/{encoded_title}"
 
 
 def safe_filename(name: str) -> str:
