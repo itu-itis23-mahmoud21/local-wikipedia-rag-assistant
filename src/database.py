@@ -193,6 +193,21 @@ class MetadataDB:
 
         return _row_to_dict(row)
 
+    def get_entity_by_id(self, entity_id: int) -> dict | None:
+        """Return an entity by id."""
+
+        with closing(self.connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM entities
+                WHERE id = ?;
+                """,
+                (entity_id,),
+            ).fetchone()
+
+        return _row_to_dict(row)
+
     def list_entities(self, entity_type: str | None = None) -> list[dict]:
         """List entities, optionally filtered by entity type."""
 
@@ -426,6 +441,20 @@ class MetadataDB:
             connection.commit()
 
         return deleted_count
+
+    def update_chunk_vector_id(self, chunk_id: int, vector_id: str | None) -> None:
+        """Update the stored vector id for one chunk."""
+
+        with closing(self.connect()) as connection:
+            connection.execute(
+                """
+                UPDATE chunks
+                SET vector_id = ?
+                WHERE id = ?;
+                """,
+                (vector_id, chunk_id),
+            )
+            connection.commit()
 
     def start_ingestion_run(
         self,

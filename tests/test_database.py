@@ -82,6 +82,17 @@ class TestMetadataDB(unittest.TestCase):
         self.assertIsNotNone(entity)
         self.assertEqual(entity["name"], "Marie Curie")
 
+    def test_get_entity_by_id_returns_entity(self) -> None:
+        """Entity lookup by id should return the matching row."""
+
+        entity_id = self.db.upsert_entity("Marie Curie", "person")
+
+        entity = self.db.get_entity_by_id(entity_id)
+
+        self.assertIsNotNone(entity)
+        self.assertEqual(entity["id"], entity_id)
+        self.assertEqual(entity["name"], "Marie Curie")
+
     def test_list_entities_filters_by_type(self) -> None:
         """list_entities should filter people and places."""
 
@@ -147,6 +158,17 @@ class TestMetadataDB(unittest.TestCase):
         self.assertEqual(chunks[0]["char_count"], 20)
         self.assertEqual(chunks[0]["token_estimate"], 5)
         self.assertEqual(chunks[0]["vector_id"], "vec-1")
+
+    def test_update_chunk_vector_id_updates_chunk(self) -> None:
+        """update_chunk_vector_id should store the Chroma vector id."""
+
+        entity_id, document_id = self._create_entity_and_document()
+        chunk_id = self.db.add_chunk(document_id, entity_id, 0, "text")
+
+        self.db.update_chunk_vector_id(chunk_id, "chunk-123")
+        chunk = self.db.list_chunks(document_id=document_id)[0]
+
+        self.assertEqual(chunk["vector_id"], "chunk-123")
 
     def test_list_chunks_filters_by_document_id_and_entity_id(self) -> None:
         """Chunk listing should support document and entity filters."""
