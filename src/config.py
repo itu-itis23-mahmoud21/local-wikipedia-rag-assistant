@@ -22,6 +22,7 @@ CHROMA_COLLECTION_NAME = "wikipedia_entities"
 
 DEFAULT_CHUNK_SIZE_CHARS = 900
 DEFAULT_CHUNK_OVERLAP_CHARS = 150
+DEFAULT_TOP_K = 5
 
 # Backwards-compatible aliases for earlier skeleton placeholders.
 CHROMA_DIR = CHROMA_DB_DIR

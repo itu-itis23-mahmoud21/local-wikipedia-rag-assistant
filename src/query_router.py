@@ -1,11 +1,193 @@
-"""Query routing placeholder.
+"""Rule-based query routing for person/place Wikipedia questions."""
 
-This module will decide whether a user question is about a person, a place, or
-both, then expose that routing decision to retrieval.
-"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+import re
+
+from src.entities import get_people, get_places
 
 
-def route_query(query: str) -> str:
-    """Classify a query as `person`, `place`, or `both`."""
+ROUTE_PERSON = "person"
+ROUTE_PLACE = "place"
+ROUTE_BOTH = "both"
+ROUTE_UNKNOWN = "unknown"
 
-    raise NotImplementedError("Query routing is not implemented yet.")
+COMPARISON_INDICATORS = (
+    "compare",
+    "comparison",
+    "versus",
+    "vs",
+    "difference",
+    "similarities",
+    "similar",
+    "contrast",
+)
+
+PERSON_KEYWORDS = (
+    "who",
+    "person",
+    "born",
+    "died",
+    "discovered",
+    "invented",
+    "wrote",
+    "singer",
+    "footballer",
+    "athlete",
+    "scientist",
+    "artist",
+    "king",
+    "queen",
+    "president",
+)
+
+PLACE_KEYWORDS = (
+    "where",
+    "located",
+    "built",
+    "monument",
+    "city",
+    "country",
+    "mountain",
+    "river",
+    "museum",
+    "palace",
+    "tower",
+    "landmark",
+    "place",
+)
+
+BROAD_MIXED_CLUES = (
+    "associated with",
+    "known for",
+)
+
+
+@dataclass(frozen=True)
+class QueryRoute:
+    """Routing decision and matched configured entities for a query."""
+
+    route: str
+    matched_people: list[str]
+    matched_places: list[str]
+    reason: str
+
+
+def normalize_query(text: str) -> str:
+    """Normalize query text for simple rule matching."""
+
+    return " ".join(text.casefold().strip().split())
+
+
+def find_entity_mentions(query: str, candidates: list[str]) -> list[str]:
+    """Return configured entity names mentioned in the query."""
+
+    normalized_query = normalize_query(query)
+    mentions: list[str] = []
+    seen: set[str] = set()
+
+    for candidate in candidates:
+        normalized_candidate = normalize_query(candidate)
+        if not normalized_candidate or normalized_candidate in seen:
+            continue
+        if _contains_phrase(normalized_query, normalized_candidate):
+            mentions.append(candidate)
+            seen.add(normalized_candidate)
+
+    return mentions
+
+
+def route_query(query: str) -> QueryRoute:
+    """Classify a query as person, place, both, or unknown."""
+
+    normalized_query = normalize_query(query)
+    if not normalized_query:
+        raise ValueError("query must not be blank.")
+
+    matched_people = find_entity_mentions(query, get_people())
+    matched_places = find_entity_mentions(query, get_places())
+    total_matches = len(matched_people) + len(matched_places)
+    has_comparison = _contains_any_keyword(normalized_query, COMPARISON_INDICATORS)
+
+    if has_comparison and total_matches >= 2:
+        return QueryRoute(
+            route=ROUTE_BOTH,
+            matched_people=matched_people,
+            matched_places=matched_places,
+            reason="comparison query with multiple known entities",
+        )
+
+    if matched_people and matched_places:
+        return QueryRoute(
+            route=ROUTE_BOTH,
+            matched_people=matched_people,
+            matched_places=matched_places,
+            reason="known person and place mentioned",
+        )
+
+    if matched_people:
+        return QueryRoute(
+            route=ROUTE_PERSON,
+            matched_people=matched_people,
+            matched_places=matched_places,
+            reason="known person mentioned",
+        )
+
+    if matched_places:
+        return QueryRoute(
+            route=ROUTE_PLACE,
+            matched_people=matched_people,
+            matched_places=matched_places,
+            reason="known place mentioned",
+        )
+
+    if _contains_any_keyword(normalized_query, PERSON_KEYWORDS):
+        return QueryRoute(
+            route=ROUTE_PERSON,
+            matched_people=matched_people,
+            matched_places=matched_places,
+            reason="person-related keyword detected",
+        )
+
+    if _contains_any_keyword(normalized_query, PLACE_KEYWORDS):
+        return QueryRoute(
+            route=ROUTE_PLACE,
+            matched_people=matched_people,
+            matched_places=matched_places,
+            reason="place-related keyword detected",
+        )
+
+    if _contains_any_phrase(normalized_query, BROAD_MIXED_CLUES):
+        return QueryRoute(
+            route=ROUTE_BOTH,
+            matched_people=matched_people,
+            matched_places=matched_places,
+            reason="broad mixed clue detected",
+        )
+
+    return QueryRoute(
+        route=ROUTE_UNKNOWN,
+        matched_people=matched_people,
+        matched_places=matched_places,
+        reason="no configured entity or routing keyword matched",
+    )
+
+
+def _contains_phrase(text: str, phrase: str) -> bool:
+    """Return whether a normalized phrase appears with safe boundaries."""
+
+    pattern = rf"(?<!\w){re.escape(phrase)}(?!\w)"
+    return re.search(pattern, text) is not None
+
+
+def _contains_any_keyword(text: str, keywords: tuple[str, ...]) -> bool:
+    """Return whether any keyword appears with safe word boundaries."""
+
+    return any(_contains_phrase(text, keyword) for keyword in keywords)
+
+
+def _contains_any_phrase(text: str, phrases: tuple[str, ...]) -> bool:
+    """Return whether any phrase appears in text."""
+
+    return any(phrase in text for phrase in phrases)
