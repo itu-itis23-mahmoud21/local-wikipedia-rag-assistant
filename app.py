@@ -11,7 +11,6 @@ from typing import Any
 from uuid import uuid4
 
 import streamlit as st
-import streamlit.components.v1 as components
 
 from src import config
 from src.database import MetadataDB
@@ -465,14 +464,49 @@ def render_copy_button(label: str, text: str, key: str) -> None:
     label_html = html.escape(label)
 
     component_html = f"""
-    <div style="display:flex; align-items:center; gap:0.5rem; font-family:sans-serif;
-      color:CanvasText; color-scheme:light dark;">
-      <button id="{button_id}" type="button"
-        style="padding:0.35rem 0.65rem; border:1px solid #d0d7de; border-radius:6px;
-        background:transparent; cursor:pointer; color:inherit;">
+    <!doctype html>
+    <html>
+    <head>
+    <style>
+    html, body {{
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: transparent;
+      color-scheme: light dark;
+    }}
+    .copy-row {{
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      height: 40px;
+      font-family: sans-serif;
+      color: CanvasText;
+    }}
+    .copy-row button {{
+      padding: 0.35rem 0.65rem;
+      border: 1px solid #d0d7de;
+      border-radius: 6px;
+      background: transparent;
+      cursor: pointer;
+      color: inherit;
+      line-height: 1.1;
+    }}
+    .copy-row span {{
+      font-size: 0.85rem;
+      color: inherit;
+      opacity: 0.72;
+      line-height: 1;
+    }}
+    </style>
+    </head>
+    <body>
+    <div class="copy-row">
+      <button id="{button_id}" type="button">
         {label_html}
       </button>
-      <span id="{status_id}" style="font-size:0.85rem; color:inherit; opacity:0.72;"></span>
+      <span id="{status_id}"></span>
     </div>
     <script>
     const copyButton = document.getElementById({json.dumps(button_id)});
@@ -491,8 +525,16 @@ def render_copy_button(label: str, text: str, key: str) -> None:
       }}
     }});
     </script>
+    </body>
+    </html>
     """
-    components.html(component_html, height=44)
+    _render_html_iframe(component_html, height=42)
+
+
+def _render_html_iframe(markup: str, height: int) -> None:
+    """Render inline HTML in an iframe without using deprecated Streamlit APIs."""
+
+    st.iframe(markup, height=height)
 
 
 def inject_custom_css() -> None:
@@ -700,6 +742,13 @@ def inject_custom_css() -> None:
             display: flex !important;
             align-items: center !important;
             justify-content: center !important;
+            width: 1.55rem !important;
+            height: 1.55rem !important;
+            font-size: 1.55rem !important;
+            line-height: 1 !important;
+        }
+        div.st-key-random_prompt_button button svg {
+            transform: translate(-50%, -50%) scale(1.18) !important;
         }
         </style>
         """,
@@ -994,7 +1043,7 @@ def render_random_prompt_button() -> None:
 
     if st.button(
         "Random prompt",
-        icon=":material/casino:",
+        icon=":material/playing_cards:",
         key=RANDOM_PROMPT_BUTTON_KEY,
         help="Generate a random question",
         type="primary",
