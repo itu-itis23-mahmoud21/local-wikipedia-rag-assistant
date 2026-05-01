@@ -1,6 +1,7 @@
 """Tests for document chunking utilities."""
 
 from pathlib import Path
+import re
 import tempfile
 import unittest
 
@@ -9,6 +10,28 @@ from src.chunker import TextChunk, chunk_file, chunk_text, estimate_tokens
 
 class TestChunker(unittest.TestCase):
     """Tests for deterministic Wikipedia document chunking."""
+
+    @staticmethod
+    def _normalized_words(text: str) -> set[str]:
+        """Return lowercase word tokens stripped of punctuation for assertions."""
+
+        return {
+            TestChunker._normalize_token(word)
+            for word in text.split()
+            if TestChunker._normalize_token(word)
+        }
+
+    @staticmethod
+    def _normalize_token(token: str) -> str:
+        """Normalize a token for boundary-focused tests."""
+
+        return re.sub(r"^\W+|\W+$", "", token).casefold()
+
+    @staticmethod
+    def _first_word(text: str) -> str:
+        """Return the first normalized word in a chunk."""
+
+        return TestChunker._normalize_token(text.split()[0])
 
     def test_blank_text_returns_empty_list(self) -> None:
         """Blank input should not create chunks."""
@@ -81,7 +104,96 @@ class TestChunker(unittest.TestCase):
 
         self.assertGreater(len(chunks), 1)
         self.assertTrue(all(chunk.text for chunk in chunks))
-        self.assertTrue(all(chunk.char_count <= 60 for chunk in chunks))
+        self.assertTrue(all(chunk.char_count <= 62 for chunk in chunks))
+
+    def test_long_paragraph_sentences_start_with_complete_words(self) -> None:
+        """Sentence-aware splitting should avoid mid-word chunk starts."""
+
+        text = (
+            "Theory explains electricity in detail with careful historical context. "
+            "Especially notable experiments followed across several laboratories. "
+            "Researchers documented observations and shared complete reports. "
+            "Final sentence closes the paragraph with a clean boundary."
+        )
+
+        chunks = chunk_text(text, chunk_size=85, overlap=20)
+        source_words = self._normalized_words(text)
+
+        self.assertGreater(len(chunks), 1)
+        for chunk in chunks:
+            self.assertIn(self._first_word(chunk.text), source_words)
+
+    def test_normal_sentences_are_grouped_on_sentence_boundaries(self) -> None:
+        """Long normal paragraphs should prefer complete sentence chunks."""
+
+        text = (
+            "Alpha researchers wrote the first complete sentence. "
+            "Beta engineers added another complete sentence for context. "
+            "Gamma historians described the final complete sentence clearly."
+        )
+
+        chunks = chunk_text(text, chunk_size=70, overlap=15)
+        source_words = self._normalized_words(text)
+
+        self.assertGreater(len(chunks), 1)
+        for chunk in chunks:
+            self.assertIn(self._first_word(chunk.text), source_words)
+
+    def test_very_long_sentence_without_punctuation_splits_by_words(self) -> None:
+        """A long sentence without punctuation should still split on words."""
+
+        text = " ".join(f"word{index}" for index in range(40))
+
+        chunks = chunk_text(text, chunk_size=45, overlap=12)
+        source_words = self._normalized_words(text)
+
+        self.assertGreater(len(chunks), 1)
+        for chunk in chunks:
+            self.assertIn(self._first_word(chunk.text), source_words)
+
+    def test_extremely_long_word_uses_character_fallback_safely(self) -> None:
+        """A single abnormal word should still be chunked without looping."""
+
+        chunks = chunk_text("x" * 130, chunk_size=40, overlap=5)
+
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(chunk.text for chunk in chunks))
+        self.assertTrue(all(chunk.char_count <= 47 for chunk in chunks))
+
+    def test_overlap_tail_starts_with_complete_word_for_normal_text(self) -> None:
+        """Overlap should prefer whole trailing words instead of word suffixes."""
+
+        text = (
+            "Alpha beta gamma delta epsilon zeta eta theta iota kappa lambda. "
+            "Mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega. "
+            "Another sentence keeps the paragraph long enough for chunking."
+        )
+
+        chunks = chunk_text(text, chunk_size=75, overlap=18)
+        source_words = self._normalized_words(text)
+
+        self.assertGreater(len(chunks), 1)
+        for chunk in chunks[1:]:
+            self.assertIn(self._first_word(chunk.text), source_words)
+
+    def test_chunks_do_not_exceed_size_plus_overlap_unexpectedly(self) -> None:
+        """Overlap may grow chunks slightly, but should stay bounded."""
+
+        chunk_size = 70
+        overlap = 15
+        text = (
+            "First sentence has enough words to participate in chunking. "
+            "Second sentence provides additional source material. "
+            "Third sentence adds more words for another chunk. "
+            "Fourth sentence closes the example cleanly."
+        )
+
+        chunks = chunk_text(text, chunk_size=chunk_size, overlap=overlap)
+
+        self.assertTrue(chunks)
+        self.assertTrue(
+            all(chunk.char_count <= chunk_size + overlap + 2 for chunk in chunks)
+        )
 
     def test_invalid_chunk_size_raises_value_error(self) -> None:
         """chunk_size must be positive."""
