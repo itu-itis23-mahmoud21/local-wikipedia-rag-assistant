@@ -9,8 +9,10 @@ from app import (
     build_chat_export_text,
     error_to_chat_message,
     finish_generation_if_ready,
+    format_assistant_caption,
     format_context_for_copy,
     format_sources_for_copy,
+    format_status_metric_value,
     get_export_filename,
     get_system_status,
     handle_user_query,
@@ -164,6 +166,13 @@ class TestAppHelpers(unittest.TestCase):
         self.assertIsNone(status["database_error"])
         self.assertIsNone(status["vector_error"])
 
+    def test_format_status_metric_value_formats_counts(self) -> None:
+        """Sidebar metric values should be stable and readable."""
+
+        self.assertEqual(format_status_metric_value(1000), "1,000")
+        self.assertEqual(format_status_metric_value(None), "0")
+        self.assertEqual(format_status_metric_value("ready"), "ready")
+
     def test_normalize_source_handles_expected_source_fields(self) -> None:
         """Source normalization should return all display fields."""
 
@@ -245,6 +254,18 @@ class TestAppHelpers(unittest.TestCase):
         self.assertEqual(message["sources"], [{"rank": 1}])
         self.assertEqual(message["context"], "Context.")
         self.assertFalse(message["error"])
+
+    def test_format_assistant_caption_uses_middle_dot_separator(self) -> None:
+        """Assistant captions should use the polished metadata format."""
+
+        caption = format_assistant_caption(
+            {"route": "person", "model": config.OLLAMA_GENERATION_MODEL}
+        )
+
+        self.assertEqual(
+            caption,
+            f"Route: person · Model: {config.OLLAMA_GENERATION_MODEL}",
+        )
 
     def test_handle_user_query_returns_assistant_message(self) -> None:
         """handle_user_query should convert generator output to a chat message."""

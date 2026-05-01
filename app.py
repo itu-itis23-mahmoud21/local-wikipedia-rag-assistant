@@ -92,6 +92,19 @@ def get_system_status(
     return status
 
 
+def format_status_metric_value(value: object) -> str:
+    """Format sidebar metric values consistently."""
+
+    if value is None:
+        return "0"
+    if isinstance(value, bool):
+        return str(value)
+    try:
+        return f"{int(value):,}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
 def create_generator() -> OllamaAnswerGenerator:
     """Create the default local answer generator."""
 
@@ -213,6 +226,17 @@ def get_export_filename() -> str:
     """Return the default TXT filename for chat export."""
 
     return EXPORT_FILENAME
+
+
+def format_assistant_caption(message: dict) -> str:
+    """Build the compact assistant metadata caption."""
+
+    parts: list[str] = []
+    if message.get("route"):
+        parts.append(f"Route: {message['route']}")
+    if message.get("model"):
+        parts.append(f"Model: {message['model']}")
+    return " · ".join(parts)
 
 
 def _format_message_metadata(message: dict) -> str:
@@ -420,48 +444,163 @@ def render_copy_button(label: str, text: str, key: str) -> None:
     components.html(component_html, height=44)
 
 
+def inject_custom_css() -> None:
+    """Inject small local CSS improvements for the Streamlit UI."""
+
+    st.markdown(
+        """
+        <style>
+        .app-header {
+            border: 1px solid #d0d7de;
+            border-radius: 8px;
+            padding: 1.1rem 1.25rem;
+            margin-bottom: 1rem;
+            background: linear-gradient(135deg, #ffffff 0%, #f6f8fa 100%);
+        }
+        .app-title {
+            font-size: 2rem;
+            font-weight: 700;
+            letter-spacing: 0;
+            margin: 0 0 0.25rem 0;
+            color: #24292f;
+        }
+        .app-subtitle {
+            color: #57606a;
+            font-size: 1rem;
+            margin: 0 0 0.85rem 0;
+        }
+        .badge-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.4rem;
+        }
+        .app-badge {
+            border: 1px solid #d0d7de;
+            border-radius: 999px;
+            padding: 0.18rem 0.55rem;
+            background: #ffffff;
+            color: #57606a;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+        .source-card {
+            border: 1px solid #d0d7de;
+            border-radius: 8px;
+            padding: 0.8rem 0.9rem;
+            margin: 0.65rem 0;
+            background: #ffffff;
+        }
+        .source-title {
+            font-weight: 700;
+            color: #24292f;
+            margin-bottom: 0.35rem;
+        }
+        .source-meta {
+            color: #57606a;
+            font-size: 0.86rem;
+            line-height: 1.45;
+        }
+        .source-preview {
+            border-top: 1px solid #eaeef2;
+            margin-top: 0.55rem;
+            padding-top: 0.55rem;
+            color: #57606a;
+            font-size: 0.9rem;
+        }
+        .status-note {
+            color: #57606a;
+            font-size: 0.85rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_app_header() -> None:
+    """Render the polished app header."""
+
+    badges = ["Local-only", "Wikipedia RAG", "Ollama", "Chroma + SQLite"]
+    badge_html = "".join(
+        f'<span class="app-badge">{html.escape(badge)}</span>' for badge in badges
+    )
+    st.markdown(
+        f"""
+        <div class="app-header">
+          <div class="app-title">{html.escape(APP_TITLE)}</div>
+          <div class="app-subtitle">{html.escape(APP_CAPTION)}</div>
+          <div class="badge-row">{badge_html}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_sidebar(status: dict) -> None:
     """Render the status sidebar."""
 
     st.sidebar.header("Local System")
-    st.sidebar.write(f"Generation model: `{status['generation_model']}`")
-    st.sidebar.write(f"Embedding model: `{status['embedding_model']}`")
-    st.sidebar.write(f"Chroma collection: `{status['collection_name']}`")
-    st.sidebar.write(f"SQLite database: `{status['sqlite_db_path']}`")
-    st.sidebar.write(f"Chroma database: `{status['chroma_db_path']}`")
 
-    st.sidebar.subheader("Metadata Counts")
+    st.sidebar.subheader("Models")
+    st.sidebar.write(f"Generation: `{status['generation_model']}`")
+    st.sidebar.write(f"Embeddings: `{status['embedding_model']}`")
+
+    st.sidebar.subheader("Storage")
+    st.sidebar.write(f"Collection: `{status['collection_name']}`")
+    st.sidebar.caption(f"SQLite: {status['sqlite_db_path']}")
+    st.sidebar.caption(f"Chroma: {status['chroma_db_path']}")
+
+    st.sidebar.subheader("Dataset / Status")
+    render_status_metrics(status)
+
+    st.sidebar.subheader("Actions")
+    action_columns = st.sidebar.columns(2)
+    with action_columns[0]:
+        if st.button("Refresh status", use_container_width=True):
+            st.rerun()
+    with action_columns[1]:
+        if st.button("Clear chat", use_container_width=True):
+            st.session_state["messages"] = []
+            _clear_generation_state(st.session_state, stop_requested=False)
+            st.rerun()
+
+    st.sidebar.subheader("Export")
+    render_chat_export_panel()
+
+
+def render_status_metrics(status: dict) -> None:
+    """Render compact sidebar metrics for local data readiness."""
+
+    counts = status.get("counts", {})
+    metric_columns = st.sidebar.columns(2)
+
+    with metric_columns[0]:
+        st.metric("Entities", format_status_metric_value(counts.get("entities", 0)))
+        st.metric("Chunks", format_status_metric_value(counts.get("chunks", 0)))
+    with metric_columns[1]:
+        st.metric("Documents", format_status_metric_value(counts.get("documents", 0)))
+        st.metric("Vectors", format_status_metric_value(status.get("vector_count", 0)))
+
     if status["database_error"]:
         st.sidebar.warning(status["database_error"])
     else:
-        counts = status.get("counts", {})
-        st.sidebar.write(f"Entities: `{counts.get('entities', 0)}`")
-        st.sidebar.write(f"People: `{counts.get('people', 0)}`")
-        st.sidebar.write(f"Places: `{counts.get('places', 0)}`")
-        st.sidebar.write(f"Documents: `{counts.get('documents', 0)}`")
-        st.sidebar.write(f"Chunks: `{counts.get('chunks', 0)}`")
-        st.sidebar.write(
-            f"Successful documents: `{counts.get('successful_documents', 0)}`"
+        st.sidebar.caption(
+            "People: "
+            f"{format_status_metric_value(counts.get('people', 0))} · "
+            "Places: "
+            f"{format_status_metric_value(counts.get('places', 0))}"
         )
-        st.sidebar.write(f"Failed documents: `{counts.get('failed_documents', 0)}`")
+        st.sidebar.caption(
+            "Successful docs: "
+            f"{format_status_metric_value(counts.get('successful_documents', 0))} · "
+            "Failed docs: "
+            f"{format_status_metric_value(counts.get('failed_documents', 0))}"
+        )
 
-    st.sidebar.subheader("Vector Store")
     if status["vector_error"]:
         st.sidebar.warning(status["vector_error"])
-    else:
-        st.sidebar.write(f"Stored vectors: `{status.get('vector_count', 0)}`")
-        if not status.get("vector_count"):
-            st.sidebar.info("No vectors found yet. Build the vector store first.")
-
-    if st.sidebar.button("Refresh status"):
-        st.rerun()
-
-    if st.sidebar.button("Clear chat"):
-        st.session_state["messages"] = []
-        _clear_generation_state(st.session_state, stop_requested=False)
-        st.rerun()
-
-    render_chat_export_panel()
+    elif not status.get("vector_count"):
+        st.sidebar.info("No vectors found yet. Build the vector store first.")
 
 
 def render_chat_export_panel() -> None:
@@ -524,8 +663,9 @@ def render_chat_history() -> None:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
             if message.get("role") == "assistant":
-                if message.get("route"):
-                    st.caption(f"Route: {message['route']} | Model: {message['model']}")
+                assistant_caption = format_assistant_caption(message)
+                if assistant_caption:
+                    st.caption(assistant_caption)
                 render_sources(message.get("sources", []), key=f"sources_{index}")
                 render_context(message.get("context", ""), key=f"context_{index}")
 
@@ -539,15 +679,35 @@ def render_sources(sources: list[dict], key: str = "sources") -> None:
     with st.expander("Retrieved sources"):
         render_copy_button("Copy sources", format_sources_for_copy(sources), key)
         for source in sources:
-            normalized = normalize_source(source)
-            st.markdown(
-                f"**Source {normalized['rank']}** - "
-                f"{normalized['entity']} ({normalized['entity_type']})"
-            )
-            st.write(f"URL: {normalized['source_url'] or 'Not available'}")
-            st.write(f"Chunk ID: `{normalized['chunk_id']}`")
-            st.write(f"Distance: `{normalized['distance']}`")
-            st.caption(normalized["preview"])
+            render_source_card(source)
+
+
+def render_source_card(source: dict) -> None:
+    """Render one scannable retrieved-source card."""
+
+    normalized = normalize_source(source)
+    rank = html.escape(str(normalized["rank"]))
+    entity = html.escape(normalized["entity"] or "Not available")
+    entity_type = html.escape(normalized["entity_type"] or "Not available")
+    source_url = html.escape(normalized["source_url"] or "Not available")
+    chunk_id = html.escape(str(normalized["chunk_id"]))
+    distance = html.escape(str(normalized["distance"]))
+    preview = html.escape(normalized["preview"] or "")
+
+    st.markdown(
+        f"""
+        <div class="source-card">
+          <div class="source-title">Source {rank} · {entity} ({entity_type})</div>
+          <div class="source-meta">
+            URL: {source_url}<br>
+            Chunk ID: <code>{chunk_id}</code><br>
+            Distance: <code>{distance}</code>
+          </div>
+          <div class="source-preview">{preview}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def render_context(context: str, key: str = "context") -> None:
@@ -567,10 +727,18 @@ def render_generation_controls() -> None:
     if not is_generation_active():
         return
 
-    st.info(GENERATION_STATUS_TEXT)
-    if st.button("Stop generation"):
-        stop_generation()
-        st.rerun()
+    status_control = getattr(st, "status", None)
+    if status_control is not None:
+        with status_control(GENERATION_STATUS_TEXT, expanded=True):
+            st.write("Routing the question, searching local context, and calling Ollama.")
+            if st.button("Stop generation", type="secondary"):
+                stop_generation()
+                st.rerun()
+    else:
+        st.info(GENERATION_STATUS_TEXT)
+        if st.button("Stop generation", type="secondary"):
+            stop_generation()
+            st.rerun()
 
     time.sleep(GENERATION_POLL_SECONDS)
     st.rerun()
@@ -579,11 +747,10 @@ def render_generation_controls() -> None:
 def main() -> None:
     """Run the Streamlit app."""
 
-    st.set_page_config(page_title=APP_TITLE, page_icon=":mag:")
+    st.set_page_config(page_title=APP_TITLE, page_icon=":mag:", layout="wide")
     initialize_session_state()
-
-    st.title(APP_TITLE)
-    st.caption(APP_CAPTION)
+    inject_custom_css()
+    render_app_header()
 
     render_sidebar(get_system_status())
     if finish_generation_if_ready():
