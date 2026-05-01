@@ -180,6 +180,7 @@ class ChromaVectorStore:
         query: str,
         top_k: int = 5,
         entity_type: str | None = None,
+        entity_names: list[str] | None = None,
     ) -> list[VectorSearchResult]:
         """Search Chroma by embedded query text."""
 
@@ -191,7 +192,7 @@ class ChromaVectorStore:
             allowed = ", ".join(ENTITY_TYPES)
             raise ValueError(f"entity_type must be one of: {allowed}.")
 
-        where = {"entity_type": entity_type} if entity_type is not None else None
+        where = _build_where_filter(entity_type, entity_names)
 
         try:
             query_embedding = self.embedding_client.embed_text(query)
@@ -220,6 +221,50 @@ def get_collection():
     """Return the configured Chroma collection."""
 
     return ChromaVectorStore().collection
+
+
+def _build_where_filter(
+    entity_type: str | None,
+    entity_names: list[str] | None,
+) -> dict | None:
+    """Build a Chroma metadata filter from route/entity constraints."""
+
+    conditions: list[dict] = []
+    clean_entity_names = _normalize_entity_names(entity_names)
+
+    if entity_type is not None:
+        conditions.append({"entity_type": entity_type})
+
+    if len(clean_entity_names) == 1:
+        conditions.append({"entity": clean_entity_names[0]})
+    elif len(clean_entity_names) > 1:
+        conditions.append({"entity": {"$in": clean_entity_names}})
+
+    if not conditions:
+        return None
+    if len(conditions) == 1:
+        return conditions[0]
+    return {"$and": conditions}
+
+
+def _normalize_entity_names(entity_names: list[str] | None) -> list[str]:
+    """Clean blank names and remove duplicates while preserving order."""
+
+    if not entity_names:
+        return []
+
+    names: list[str] = []
+    seen: set[str] = set()
+    for name in entity_names:
+        clean_name = str(name).strip()
+        if not clean_name:
+            continue
+        name_key = clean_name.casefold()
+        if name_key in seen:
+            continue
+        names.append(clean_name)
+        seen.add(name_key)
+    return names
 
 
 def _parse_search_results(result: dict) -> list[VectorSearchResult]:

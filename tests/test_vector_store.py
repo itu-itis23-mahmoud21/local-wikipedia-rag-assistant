@@ -59,11 +59,10 @@ class FakeCollection:
         self.last_where = where
         items = list(self.items.items())
         if where:
-            key, expected_value = next(iter(where.items()))
             items = [
                 item
                 for item in items
-                if item[1]["metadata"].get(key) == expected_value
+                if self._matches_where(item[1]["metadata"], where)
             ]
         items = items[:n_results]
 
@@ -73,6 +72,21 @@ class FakeCollection:
             "metadatas": [[item["metadata"] for _, item in items]],
             "distances": [[0.1 for _ in items]],
         }
+
+    def _matches_where(self, metadata: dict, where: dict) -> bool:
+        """Apply a small subset of Chroma where filtering for tests."""
+
+        if "$and" in where:
+            return all(self._matches_where(metadata, condition) for condition in where["$and"])
+
+        for key, expected_value in where.items():
+            actual_value = metadata.get(key)
+            if isinstance(expected_value, dict) and "$in" in expected_value:
+                if actual_value not in expected_value["$in"]:
+                    return False
+            elif actual_value != expected_value:
+                return False
+        return True
 
     def count(self) -> int:
         """Return item count."""
@@ -204,6 +218,127 @@ class TestChromaVectorStore(unittest.TestCase):
         self.assertEqual(store.collection.last_where, {"entity_type": "place"})
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].metadata["entity_type"], "place")
+
+    def test_search_with_single_entity_name_applies_entity_filter(self) -> None:
+        """search should filter to one exact configured entity name."""
+
+        embedding_client = FakeEmbeddingClient()
+        with patch("src.vector_store.chromadb", self.fake_chromadb):
+            store = self._make_store(embedding_client)
+            store.add_chunk(
+                self._chunk(id=1, text="Einstein text"),
+                self._document(),
+                self._entity(name="Albert Einstein"),
+                embedding=[0.1, 0.2],
+            )
+            store.add_chunk(
+                self._chunk(id=2, text="Tesla text"),
+                self._document(),
+                self._entity(name="Nikola Tesla"),
+                embedding=[0.3, 0.4],
+            )
+            results = store.search(
+                "who was einstein?",
+                top_k=5,
+                entity_names=["Albert Einstein"],
+            )
+
+        self.assertEqual(store.collection.last_where, {"entity": "Albert Einstein"})
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].metadata["entity"], "Albert Einstein")
+
+    def test_search_with_multiple_entity_names_applies_in_filter(self) -> None:
+        """search should filter to a set of mentioned configured entities."""
+
+        embedding_client = FakeEmbeddingClient()
+        with patch("src.vector_store.chromadb", self.fake_chromadb):
+            store = self._make_store(embedding_client)
+            store.add_chunk(
+                self._chunk(id=1, text="Einstein text"),
+                self._document(),
+                self._entity(name="Albert Einstein"),
+                embedding=[0.1, 0.2],
+            )
+            store.add_chunk(
+                self._chunk(id=2, text="Tesla text"),
+                self._document(),
+                self._entity(name="Nikola Tesla"),
+                embedding=[0.3, 0.4],
+            )
+            store.add_chunk(
+                self._chunk(id=3, text="Curie text"),
+                self._document(),
+                self._entity(name="Marie Curie"),
+                embedding=[0.5, 0.6],
+            )
+            results = store.search(
+                "compare einstein and tesla",
+                top_k=5,
+                entity_names=["Albert Einstein", "Nikola Tesla"],
+            )
+
+        self.assertEqual(
+            store.collection.last_where,
+            {"entity": {"$in": ["Albert Einstein", "Nikola Tesla"]}},
+        )
+        self.assertEqual([result.metadata["entity"] for result in results], [
+            "Albert Einstein",
+            "Nikola Tesla",
+        ])
+
+    def test_search_combines_entity_type_and_entity_names(self) -> None:
+        """search should combine type and exact entity filters with $and."""
+
+        embedding_client = FakeEmbeddingClient()
+        with patch("src.vector_store.chromadb", self.fake_chromadb):
+            store = self._make_store(embedding_client)
+            store.add_chunk(
+                self._chunk(id=1, text="Einstein text"),
+                self._document(),
+                self._entity(name="Albert Einstein", entity_type="person"),
+                embedding=[0.1, 0.2],
+            )
+            store.add_chunk(
+                self._chunk(id=2, text="Eiffel text"),
+                self._document(),
+                self._entity(name="Eiffel Tower", entity_type="place"),
+                embedding=[0.3, 0.4],
+            )
+            results = store.search(
+                "who was einstein?",
+                top_k=5,
+                entity_type="person",
+                entity_names=["Albert Einstein"],
+            )
+
+        self.assertEqual(
+            store.collection.last_where,
+            {"$and": [{"entity_type": "person"}, {"entity": "Albert Einstein"}]},
+        )
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].metadata["entity"], "Albert Einstein")
+
+    def test_search_ignores_blank_entity_names(self) -> None:
+        """Blank entity names should not add metadata filters."""
+
+        embedding_client = FakeEmbeddingClient()
+        with patch("src.vector_store.chromadb", self.fake_chromadb):
+            store = self._make_store(embedding_client)
+            store.add_chunk(
+                self._chunk(id=1, text="Einstein text"),
+                self._document(),
+                self._entity(name="Albert Einstein", entity_type="person"),
+                embedding=[0.1, 0.2],
+            )
+            results = store.search(
+                "person question",
+                top_k=5,
+                entity_type="person",
+                entity_names=[" ", ""],
+            )
+
+        self.assertEqual(store.collection.last_where, {"entity_type": "person"})
+        self.assertEqual(len(results), 1)
 
     def test_search_rejects_blank_query(self) -> None:
         """Blank query text should be rejected."""

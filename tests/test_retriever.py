@@ -42,6 +42,7 @@ class FakeVectorStore:
         query: str,
         top_k: int = 5,
         entity_type: str | None = None,
+        entity_names: list[str] | None = None,
     ) -> list[VectorSearchResult]:
         """Record search parameters and return fake results."""
 
@@ -50,6 +51,7 @@ class FakeVectorStore:
                 "query": query,
                 "top_k": top_k,
                 "entity_type": entity_type,
+                "entity_names": entity_names,
             }
         )
         return self.results[:top_k]
@@ -59,18 +61,19 @@ class TestRAGRetriever(unittest.TestCase):
     """Tests for routed retrieval."""
 
     def test_retrieve_person_query_applies_person_filter(self) -> None:
-        """Person-routed queries should filter entity_type=person."""
+        """Exact person queries should filter by type and entity name."""
 
         vector_store = FakeVectorStore()
         retriever = RAGRetriever(vector_store=vector_store)
 
-        context = retriever.retrieve("What did Albert Einstein discover?")
+        context = retriever.retrieve("Who was Albert Einstein?")
 
         self.assertEqual(context.route.route, ROUTE_PERSON)
         self.assertEqual(vector_store.calls[0]["entity_type"], "person")
+        self.assertEqual(vector_store.calls[0]["entity_names"], ["Albert Einstein"])
 
     def test_retrieve_place_query_applies_place_filter(self) -> None:
-        """Place-routed queries should filter entity_type=place."""
+        """Exact place queries should filter by type and entity name."""
 
         vector_store = FakeVectorStore()
         retriever = RAGRetriever(vector_store=vector_store)
@@ -79,9 +82,10 @@ class TestRAGRetriever(unittest.TestCase):
 
         self.assertEqual(context.route.route, ROUTE_PLACE)
         self.assertEqual(vector_store.calls[0]["entity_type"], "place")
+        self.assertEqual(vector_store.calls[0]["entity_names"], ["Eiffel Tower"])
 
     def test_retrieve_both_query_applies_no_filter(self) -> None:
-        """Both-routed queries should search without entity_type filter."""
+        """Comparison queries should filter to the mentioned entities."""
 
         vector_store = FakeVectorStore()
         retriever = RAGRetriever(vector_store=vector_store)
@@ -90,6 +94,22 @@ class TestRAGRetriever(unittest.TestCase):
 
         self.assertEqual(context.route.route, ROUTE_BOTH)
         self.assertIsNone(vector_store.calls[0]["entity_type"])
+        self.assertEqual(
+            vector_store.calls[0]["entity_names"],
+            ["Albert Einstein", "Nikola Tesla"],
+        )
+
+    def test_keyword_only_person_query_keeps_type_filter_only(self) -> None:
+        """Person keyword queries without exact names should use type only."""
+
+        vector_store = FakeVectorStore()
+        retriever = RAGRetriever(vector_store=vector_store)
+
+        context = retriever.retrieve("Which person is associated with electricity?")
+
+        self.assertEqual(context.route.route, ROUTE_PERSON)
+        self.assertEqual(vector_store.calls[0]["entity_type"], "person")
+        self.assertIsNone(vector_store.calls[0]["entity_names"])
 
     def test_retrieve_unknown_query_applies_no_filter(self) -> None:
         """Unknown-routed queries should search without entity_type filter."""
@@ -101,6 +121,7 @@ class TestRAGRetriever(unittest.TestCase):
 
         self.assertEqual(context.route.route, ROUTE_UNKNOWN)
         self.assertIsNone(vector_store.calls[0]["entity_type"])
+        self.assertIsNone(vector_store.calls[0]["entity_names"])
 
     def test_retrieve_rejects_invalid_top_k(self) -> None:
         """top_k must be positive."""

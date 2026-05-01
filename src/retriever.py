@@ -53,10 +53,12 @@ class RAGRetriever:
 
         route = route_query(query)
         entity_type_filter = _entity_type_filter_for_route(route)
+        entity_name_filter = _entity_names_for_route(route)
         results = self.vector_store.search(
             query,
             top_k=effective_top_k,
             entity_type=entity_type_filter,
+            entity_names=entity_name_filter,
         )
 
         return RetrievedContext(query=query, route=route, results=results)
@@ -135,6 +137,19 @@ def _entity_type_filter_for_route(route: QueryRoute) -> str | None:
         return "place"
     if route.route == ROUTE_BOTH:
         return None
+    return None
+
+
+def _entity_names_for_route(route: QueryRoute) -> list[str] | None:
+    """Return exact configured entity names mentioned in the query, if any."""
+
+    if route.route == ROUTE_PERSON and route.matched_people:
+        return route.matched_people
+    if route.route == ROUTE_PLACE and route.matched_places:
+        return route.matched_places
+    if route.route == ROUTE_BOTH:
+        matched_entities = [*route.matched_people, *route.matched_places]
+        return matched_entities or None
     return None
 
 
