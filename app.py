@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import MutableMapping
+from concurrent.futures import Future, ThreadPoolExecutor
+import time
 from typing import Any
+from uuid import uuid4
 
 import streamlit as st
 
@@ -18,6 +21,9 @@ APP_CAPTION = (
     "Ask questions about famous people and famous places using locally ingested "
     "Wikipedia data."
 )
+STOPPED_MESSAGE = "Generation stopped by user."
+GENERATION_STATUS_TEXT = "Searching local Wikipedia context and generating answer..."
+GENERATION_POLL_SECONDS = 0.5
 
 
 def initialize_session_state(session_state: MutableMapping[str, Any] | None = None) -> None:
@@ -26,6 +32,25 @@ def initialize_session_state(session_state: MutableMapping[str, Any] | None = No
     state = session_state if session_state is not None else st.session_state
     if "messages" not in state:
         state["messages"] = []
+    if "active_request_id" not in state:
+        state["active_request_id"] = None
+    if "active_future_request_id" not in state:
+        state["active_future_request_id"] = None
+    if "active_future" not in state:
+        state["active_future"] = None
+    if "active_prompt" not in state:
+        state["active_prompt"] = None
+    if "stop_requested" not in state:
+        state["stop_requested"] = False
+    if "is_generating" not in state:
+        state["is_generating"] = False
+
+
+@st.cache_resource
+def get_executor() -> ThreadPoolExecutor:
+    """Return a shared single-worker executor for background generation."""
+
+    return ThreadPoolExecutor(max_workers=1)
 
 
 def get_system_status(
@@ -111,6 +136,21 @@ def error_to_chat_message(exc: Exception) -> dict:
     }
 
 
+def build_stopped_message() -> dict:
+    """Build the assistant message shown when a request is stopped."""
+
+    return {
+        "role": "assistant",
+        "content": STOPPED_MESSAGE,
+        "route": None,
+        "sources": [],
+        "context": "",
+        "model": config.OLLAMA_GENERATION_MODEL,
+        "error": False,
+        "stopped": True,
+    }
+
+
 def handle_user_query(
     prompt: str,
     generator: OllamaAnswerGenerator | None = None,
@@ -124,6 +164,94 @@ def handle_user_query(
         return answer_to_chat_message(answer)
     except Exception as exc:
         return error_to_chat_message(exc)
+
+
+def is_generation_active(session_state: MutableMapping[str, Any] | None = None) -> bool:
+    """Return whether a generation request is currently active."""
+
+    state = _get_state(session_state)
+    return bool(state.get("is_generating") and state.get("active_future") is not None)
+
+
+def start_generation(
+    prompt: str,
+    session_state: MutableMapping[str, Any] | None = None,
+    executor: ThreadPoolExecutor | None = None,
+    query_handler=handle_user_query,
+) -> bool:
+    """Start a background generation request if no request is active."""
+
+    state = _get_state(session_state)
+    initialize_session_state(state)
+
+    clean_prompt = prompt.strip()
+    if not clean_prompt or is_generation_active(state):
+        return False
+
+    request_id = uuid4().hex
+    active_executor = executor or get_executor()
+    future = active_executor.submit(query_handler, clean_prompt)
+
+    state["messages"].append({"role": "user", "content": clean_prompt})
+    state["active_request_id"] = request_id
+    state["active_future_request_id"] = request_id
+    state["active_future"] = future
+    state["active_prompt"] = clean_prompt
+    state["stop_requested"] = False
+    state["is_generating"] = True
+    return True
+
+
+def stop_generation(session_state: MutableMapping[str, Any] | None = None) -> bool:
+    """Mark the active generation request as stopped and unblock the UI."""
+
+    state = _get_state(session_state)
+    initialize_session_state(state)
+
+    if not is_generation_active(state):
+        return False
+
+    future = state.get("active_future")
+    if future is not None and hasattr(future, "cancel"):
+        try:
+            future.cancel()
+        except Exception:
+            pass
+
+    state["stop_requested"] = True
+    state["messages"].append(build_stopped_message())
+    _clear_generation_state(state, stop_requested=True)
+    return True
+
+
+def finish_generation_if_ready(
+    session_state: MutableMapping[str, Any] | None = None,
+) -> bool:
+    """Append a completed background answer if the active request is still valid."""
+
+    state = _get_state(session_state)
+    initialize_session_state(state)
+    future = state.get("active_future")
+
+    if not is_generation_active(state) or future is None or not future.done():
+        return False
+
+    active_request_id = state.get("active_request_id")
+    future_request_id = state.get("active_future_request_id")
+    stop_requested = bool(state.get("stop_requested"))
+
+    if stop_requested or active_request_id != future_request_id:
+        _clear_generation_state(state, stop_requested=False)
+        return True
+
+    try:
+        assistant_message = future.result()
+    except Exception as exc:
+        assistant_message = error_to_chat_message(exc)
+
+    state["messages"].append(assistant_message)
+    _clear_generation_state(state, stop_requested=False)
+    return True
 
 
 def render_sidebar(status: dict) -> None:
@@ -164,6 +292,7 @@ def render_sidebar(status: dict) -> None:
 
     if st.sidebar.button("Clear chat"):
         st.session_state["messages"] = []
+        _clear_generation_state(st.session_state, stop_requested=False)
         st.rerun()
 
 
@@ -209,6 +338,21 @@ def render_context(context: str) -> None:
         st.text(context)
 
 
+def render_generation_controls() -> None:
+    """Render generation status and stop control while a request is active."""
+
+    if not is_generation_active():
+        return
+
+    st.info(GENERATION_STATUS_TEXT)
+    if st.button("Stop generation"):
+        stop_generation()
+        st.rerun()
+
+    time.sleep(GENERATION_POLL_SECONDS)
+    st.rerun()
+
+
 def main() -> None:
     """Run the Streamlit app."""
 
@@ -219,30 +363,25 @@ def main() -> None:
     st.caption(APP_CAPTION)
 
     render_sidebar(get_system_status())
-    render_chat_history()
+    if finish_generation_if_ready():
+        st.rerun()
 
-    prompt = st.chat_input("Ask about a famous person or place")
+    render_chat_history()
+    generation_active = is_generation_active()
+    if generation_active:
+        render_generation_controls()
+
+    prompt = st.chat_input(
+        "Ask about a famous person or place",
+        disabled=generation_active,
+    )
     if not prompt:
         return
 
-    user_message = {"role": "user", "content": prompt}
-    st.session_state["messages"].append(user_message)
-    with st.chat_message("user"):
-        st.markdown(prompt)
-
-    with st.chat_message("assistant"):
-        with st.spinner("Searching local Wikipedia context..."):
-            assistant_message = handle_user_query(prompt)
-        st.markdown(assistant_message["content"])
-        if assistant_message.get("route"):
-            st.caption(
-                f"Route: {assistant_message['route']} | "
-                f"Model: {assistant_message['model']}"
-            )
-        render_sources(assistant_message.get("sources", []))
-        render_context(assistant_message.get("context", ""))
-
-    st.session_state["messages"].append(assistant_message)
+    if not start_generation(prompt):
+        st.warning("Please wait for the current answer to finish or stop it first.")
+        return
+    st.rerun()
 
 
 def _friendly_runtime_message(exc: Exception) -> str:
@@ -276,6 +415,28 @@ def _friendly_runtime_message(exc: Exception) -> str:
         "I couldn't answer because the local RAG system is not ready. "
         f"Details: {detail}"
     )
+
+
+def _get_state(
+    session_state: MutableMapping[str, Any] | None = None,
+) -> MutableMapping[str, Any]:
+    """Return explicit state or Streamlit session state."""
+
+    return session_state if session_state is not None else st.session_state
+
+
+def _clear_generation_state(
+    session_state: MutableMapping[str, Any],
+    stop_requested: bool,
+) -> None:
+    """Clear active generation fields while preserving chat history."""
+
+    session_state["active_request_id"] = None
+    session_state["active_future_request_id"] = None
+    session_state["active_future"] = None
+    session_state["active_prompt"] = None
+    session_state["is_generating"] = False
+    session_state["stop_requested"] = stop_requested
 
 
 if __name__ == "__main__":
