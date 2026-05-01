@@ -3,6 +3,15 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
 .env
 
 # Local data and generated stores
@@ -17,8 +26,11 @@ chroma_db/
 # OS / editor
 .DS_Store
 Thumbs.db
+Desktop.ini
 .vscode/
 .idea/
+*.swp
+*.swo
 
 # Logs
 logs/

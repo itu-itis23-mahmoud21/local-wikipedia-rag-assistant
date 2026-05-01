@@ -1,0 +1,5 @@
+streamlit
+requests
+chromadb
+ollama
+python-dotenv
