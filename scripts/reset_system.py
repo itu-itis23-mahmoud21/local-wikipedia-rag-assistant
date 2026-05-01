@@ -55,7 +55,7 @@ def confirm_reset(targets: list[Path], assume_yes: bool) -> bool:
 
     print("The following generated directories will be removed:")
     for target in targets:
-        print(f"- {target}")
+        print(f"- {_display_path(target)}")
 
     if assume_yes:
         return True
@@ -70,10 +70,10 @@ def reset_targets(targets: list[Path]) -> None:
     for target in targets:
         _validate_generated_target(target)
         if not target.exists():
-            print(f"Already absent: {target}")
+            print(f"Already absent: {_display_path(target)}")
             continue
         shutil.rmtree(target)
-        print(f"Removed: {target}")
+        print(f"Removed: {_display_path(target)}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -96,6 +96,15 @@ def _validate_generated_target(target: Path) -> None:
 
     if target.name not in GENERATED_TARGET_NAMES:
         raise ValueError(f"Refusing to remove unexpected target: {target}")
+
+
+def _display_path(target: Path) -> str:
+    """Return a console-safe project-relative path when possible."""
+
+    try:
+        return str(target.relative_to(PROJECT_ROOT))
+    except ValueError:
+        return str(target)
 
 
 if __name__ == "__main__":
