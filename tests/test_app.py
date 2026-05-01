@@ -5,12 +5,14 @@ import unittest
 
 from app import (
     answer_to_chat_message,
+    build_random_prompt,
     build_stopped_message,
     build_chat_export_text,
     error_to_chat_message,
     finish_generation_if_ready,
     format_assistant_caption,
     format_context_for_copy,
+    format_entity_list_for_sidebar,
     format_sources_for_copy,
     format_status_metric_value,
     get_export_filename,
@@ -19,6 +21,7 @@ from app import (
     initialize_session_state,
     is_generation_active,
     normalize_source,
+    set_random_prompt_in_chat_input,
     start_generation,
     stop_generation,
 )
@@ -150,6 +153,7 @@ class TestAppHelpers(unittest.TestCase):
         self.assertIsNone(state["active_prompt"])
         self.assertFalse(state["stop_requested"])
         self.assertFalse(state["is_generating"])
+        self.assertIsNone(state["last_random_prompt"])
 
     def test_get_system_status_handles_database_counts(self) -> None:
         """System status should include database counts and vector count."""
@@ -172,6 +176,55 @@ class TestAppHelpers(unittest.TestCase):
         self.assertEqual(format_status_metric_value(1000), "1,000")
         self.assertEqual(format_status_metric_value(None), "0")
         self.assertEqual(format_status_metric_value("ready"), "ready")
+
+    def test_format_entity_list_for_sidebar_numbers_entities(self) -> None:
+        """Sidebar entity lists should be numbered and readable."""
+
+        text = format_entity_list_for_sidebar(["Albert Einstein", "Marie Curie"])
+
+        self.assertIn("1. Albert Einstein", text)
+        self.assertIn("2. Marie Curie", text)
+
+    def test_format_entity_list_for_sidebar_handles_empty_list(self) -> None:
+        """Empty sidebar entity lists should still render a useful note."""
+
+        self.assertIn("No configured entities", format_entity_list_for_sidebar([]))
+
+    def test_build_random_prompt_for_person(self) -> None:
+        """Random prompt helper should format person starter questions."""
+
+        self.assertEqual(
+            build_random_prompt(entity_type="person", entity_name="Albert Einstein"),
+            "Who is Albert Einstein?",
+        )
+
+    def test_build_random_prompt_for_place(self) -> None:
+        """Random prompt helper should format place starter questions."""
+
+        self.assertEqual(
+            build_random_prompt(entity_type="place", entity_name="Eiffel Tower"),
+            "Where is Eiffel Tower located?",
+        )
+
+    def test_build_random_prompt_rejects_invalid_entity_type(self) -> None:
+        """Random prompt helper should reject invalid entity types."""
+
+        with self.assertRaises(ValueError):
+            build_random_prompt(entity_type="animal", entity_name="Example")
+
+    def test_set_random_prompt_in_chat_input_updates_state(self) -> None:
+        """Random prompt state helper should populate the keyed chat input."""
+
+        state: dict = {}
+
+        prompt = set_random_prompt_in_chat_input(
+            state,
+            prompt="Who is Ada Lovelace?",
+        )
+
+        self.assertEqual(prompt, "Who is Ada Lovelace?")
+        self.assertEqual(state["main_chat_input"], "Who is Ada Lovelace?")
+        self.assertEqual(state["last_random_prompt"], "Who is Ada Lovelace?")
 
     def test_normalize_source_handles_expected_source_fields(self) -> None:
         """Source normalization should return all display fields."""

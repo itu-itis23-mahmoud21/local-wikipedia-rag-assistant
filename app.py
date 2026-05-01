@@ -6,7 +6,7 @@ from collections.abc import MutableMapping
 from concurrent.futures import ThreadPoolExecutor
 import html
 import json
-import time
+import random
 from typing import Any
 from uuid import uuid4
 
@@ -15,6 +15,7 @@ import streamlit.components.v1 as components
 
 from src import config
 from src.database import MetadataDB
+from src.entities import get_people, get_places
 from src.generator import GeneratedAnswer, OllamaAnswerGenerator
 from src.vector_store import ChromaVectorStore
 
@@ -28,6 +29,9 @@ STOPPED_MESSAGE = "Generation stopped by user."
 GENERATION_STATUS_TEXT = "Searching local Wikipedia context and generating answer..."
 GENERATION_POLL_SECONDS = 0.5
 EXPORT_FILENAME = "local_wikipedia_rag_chat_export.txt"
+BUSY_COMPOSER_TEXT = "Assistant is generating. Stop the current response to ask something else."
+CHAT_INPUT_KEY = "main_chat_input"
+RANDOM_PROMPT_BUTTON_KEY = "random_prompt_button"
 
 
 def initialize_session_state(session_state: MutableMapping[str, Any] | None = None) -> None:
@@ -48,6 +52,8 @@ def initialize_session_state(session_state: MutableMapping[str, Any] | None = No
         state["stop_requested"] = False
     if "is_generating" not in state:
         state["is_generating"] = False
+    if "last_random_prompt" not in state:
+        state["last_random_prompt"] = None
 
 
 @st.cache_resource
@@ -99,10 +105,14 @@ def format_status_metric_value(value: object) -> str:
         return "0"
     if isinstance(value, bool):
         return str(value)
-    try:
+    if isinstance(value, (int, float)):
         return f"{int(value):,}"
-    except (TypeError, ValueError):
-        return str(value)
+    if isinstance(value, str):
+        try:
+            return f"{int(value):,}"
+        except ValueError:
+            return value
+    return str(value)
 
 
 def create_generator() -> OllamaAnswerGenerator:
@@ -155,6 +165,46 @@ def format_context_for_copy(context: str) -> str:
     """Format retrieved context as copyable plain text."""
 
     return str(context or "").strip()
+
+
+def format_entity_list_for_sidebar(entity_names: list[str]) -> str:
+    """Format configured entity names for the sidebar expanders."""
+
+    if not entity_names:
+        return "_No configured entities available._"
+    return "\n".join(
+        f"{index}. {entity_name}" for index, entity_name in enumerate(entity_names, start=1)
+    )
+
+
+def build_random_prompt(
+    entity_type: str | None = None,
+    entity_name: str | None = None,
+) -> str:
+    """Build a random starter question for one configured person or place."""
+
+    selected_type = entity_type or random.choice(("person", "place"))
+    if selected_type == "person":
+        selected_name = entity_name or random.choice(get_people())
+        return f"Who is {selected_name}?"
+    if selected_type == "place":
+        selected_name = entity_name or random.choice(get_places())
+        return f"Where is {selected_name} located?"
+    raise ValueError("entity_type must be 'person' or 'place'")
+
+
+def set_random_prompt_in_chat_input(
+    session_state: MutableMapping[str, Any] | None = None,
+    prompt: str | None = None,
+) -> str:
+    """Set the main chat input text to a random starter prompt."""
+
+    state = _get_state(session_state)
+    initialize_session_state(state)
+    selected_prompt = prompt or build_random_prompt()
+    state[CHAT_INPUT_KEY] = selected_prompt
+    state["last_random_prompt"] = selected_prompt
+    return selected_prompt
 
 
 def build_chat_export_text(
@@ -415,13 +465,14 @@ def render_copy_button(label: str, text: str, key: str) -> None:
     label_html = html.escape(label)
 
     component_html = f"""
-    <div style="display:flex; align-items:center; gap:0.5rem; font-family:sans-serif;">
+    <div style="display:flex; align-items:center; gap:0.5rem; font-family:sans-serif;
+      color:CanvasText; color-scheme:light dark;">
       <button id="{button_id}" type="button"
         style="padding:0.35rem 0.65rem; border:1px solid #d0d7de; border-radius:6px;
-        background:#f6f8fa; cursor:pointer;">
+        background:transparent; cursor:pointer; color:inherit;">
         {label_html}
       </button>
-      <span id="{status_id}" style="font-size:0.85rem; color:#57606a;"></span>
+      <span id="{status_id}" style="font-size:0.85rem; color:inherit; opacity:0.72;"></span>
     </div>
     <script>
     const copyButton = document.getElementById({json.dumps(button_id)});
@@ -452,20 +503,22 @@ def inject_custom_css() -> None:
         <style>
         .app-header {
             border: 1px solid #d0d7de;
+            border-left: 6px solid #ffffff;
             border-radius: 8px;
             padding: 1.1rem 1.25rem;
             margin-bottom: 1rem;
-            background: linear-gradient(135deg, #ffffff 0%, #f6f8fa 100%);
+            background: transparent;
         }
         .app-title {
             font-size: 2rem;
             font-weight: 700;
             letter-spacing: 0;
             margin: 0 0 0.25rem 0;
-            color: #24292f;
+            color: inherit;
         }
         .app-subtitle {
-            color: #57606a;
+            color: inherit;
+            opacity: 0.72;
             font-size: 1rem;
             margin: 0 0 0.85rem 0;
         }
@@ -478,25 +531,28 @@ def inject_custom_css() -> None:
             border: 1px solid #d0d7de;
             border-radius: 999px;
             padding: 0.18rem 0.55rem;
-            background: #ffffff;
-            color: #57606a;
+            background: transparent;
+            color: inherit;
+            opacity: 0.78;
             font-size: 0.8rem;
             font-weight: 600;
         }
         .source-card {
             border: 1px solid #d0d7de;
+            border-left: 3px solid #d0d7de;
             border-radius: 8px;
             padding: 0.8rem 0.9rem;
             margin: 0.65rem 0;
-            background: #ffffff;
+            background: transparent;
         }
         .source-title {
             font-weight: 700;
-            color: #24292f;
+            color: inherit;
             margin-bottom: 0.35rem;
         }
         .source-meta {
-            color: #57606a;
+            color: inherit;
+            opacity: 0.72;
             font-size: 0.86rem;
             line-height: 1.45;
         }
@@ -504,12 +560,146 @@ def inject_custom_css() -> None:
             border-top: 1px solid #eaeef2;
             margin-top: 0.55rem;
             padding-top: 0.55rem;
-            color: #57606a;
+            color: inherit;
+            opacity: 0.82;
             font-size: 0.9rem;
         }
         .status-note {
-            color: #57606a;
+            color: inherit;
+            opacity: 0.72;
             font-size: 0.85rem;
+        }
+        div.st-key-generation_status_bar {
+            padding: 0;
+            margin: 0.35rem 0 1rem;
+            position: relative;
+        }
+        div.st-key-generation_status_bar [data-testid="stMarkdownContainer"] {
+            margin: 0;
+        }
+        .generation-status-shell {
+            border: 1px solid #d0d7de;
+            border-radius: 8px;
+            background: transparent;
+            color: inherit;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.55rem;
+            font-size: 0.95rem;
+            height: 3.2rem;
+            padding: 0 0.8rem;
+            box-sizing: border-box;
+        }
+        .generation-status-text {
+            display: flex;
+            align-items: center;
+            gap: 0.55rem;
+            min-width: 0;
+            line-height: 1.35;
+        }
+        .generation-status-label {
+            display: block;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            line-height: 1.35;
+        }
+        .generation-spinner {
+            width: 1rem;
+            height: 1rem;
+            border: 2px solid #d0d7de;
+            border-top-color: #0969da;
+            border-radius: 50%;
+            animation: rag-spin 0.85s linear infinite;
+            flex: 0 0 auto;
+        }
+        .generation-stop-visual {
+            width: 2rem;
+            height: 2rem;
+            border-radius: 0.55rem;
+            background: #ff4b4b;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex: 0 0 auto;
+        }
+        .generation-stop-visual::before {
+            content: "";
+            width: 0.72rem;
+            height: 0.72rem;
+            background: #ffffff;
+            border-radius: 0.18rem;
+        }
+        @keyframes rag-spin {
+            to { transform: rotate(360deg); }
+        }
+        div.st-key-stop_generation_in_status {
+            position: absolute !important;
+            top: 50% !important;
+            right: 0.8rem !important;
+            transform: translateY(-50%) !important;
+            z-index: 3;
+            width: 2rem !important;
+            height: 2rem !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+        div.st-key-stop_generation_in_status button {
+            width: 2rem !important;
+            min-width: 2rem !important;
+            height: 2rem !important;
+            min-height: 2rem !important;
+            padding: 0 !important;
+            border: 0 !important;
+            background: transparent !important;
+            box-shadow: none !important;
+            opacity: 0 !important;
+        }
+        div.st-key-main_chat_input,
+        div[class*="e15xmbo00"]:has(textarea) {
+            margin-right: 3.75rem !important;
+        }
+        div.st-key-random_prompt_button {
+            position: fixed !important;
+            bottom: 4.1rem !important;
+            right: 1.5rem !important;
+            z-index: 1002;
+            width: 2.35rem !important;
+            height: 2.35rem !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+        div.st-key-random_prompt_button button {
+            width: 2.35rem !important;
+            min-width: 2.35rem !important;
+            height: 2.35rem !important;
+            min-height: 2.35rem !important;
+            padding: 0 !important;
+            border-radius: 999px !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            gap: 0 !important;
+            line-height: 1 !important;
+            position: relative !important;
+            box-shadow: none !important;
+        }
+        div.st-key-random_prompt_button button p {
+            display: none !important;
+            margin: 0 !important;
+            width: 0 !important;
+        }
+        div.st-key-random_prompt_button button svg,
+        div.st-key-random_prompt_button button span {
+            position: absolute !important;
+            left: 50% !important;
+            top: 50% !important;
+            transform: translate(-50%, -50%) !important;
+            margin: 0 !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
         }
         </style>
         """,
@@ -566,6 +756,8 @@ def render_sidebar(status: dict) -> None:
 
     st.sidebar.subheader("Export")
     render_chat_export_panel()
+
+    render_entity_catalog()
 
 
 def render_status_metrics(status: dict) -> None:
@@ -656,6 +848,25 @@ def _render_chat_export_options() -> None:
     )
 
 
+def render_entity_catalog() -> None:
+    """Render configured people and places as sidebar reference lists."""
+
+    people = get_people()
+    places = get_places()
+
+    st.sidebar.subheader("Configured Wikipedia Entities")
+    st.sidebar.caption(
+        "These are the local dataset targets. After running setup, their "
+        "Wikipedia pages are stored locally, chunked, embedded, and indexed for RAG."
+    )
+
+    with st.sidebar.expander(f"People ({len(people)})"):
+        st.markdown(format_entity_list_for_sidebar(people))
+
+    with st.sidebar.expander(f"Places ({len(places)})"):
+        st.markdown(format_entity_list_for_sidebar(places))
+
+
 def render_chat_history() -> None:
     """Render messages stored in session state."""
 
@@ -721,27 +932,75 @@ def render_context(context: str, key: str = "context") -> None:
         st.text(context)
 
 
-def render_generation_controls() -> None:
+def _render_generation_controls_body() -> None:
     """Render generation status and stop control while a request is active."""
 
     if not is_generation_active():
         return
 
-    status_control = getattr(st, "status", None)
-    if status_control is not None:
-        with status_control(GENERATION_STATUS_TEXT, expanded=True):
-            st.write("Routing the question, searching local context, and calling Ollama.")
-            if st.button("Stop generation", type="secondary"):
-                stop_generation()
-                st.rerun()
-    else:
-        st.info(GENERATION_STATUS_TEXT)
-        if st.button("Stop generation", type="secondary"):
+    if finish_generation_if_ready():
+        st.rerun()
+
+    render_generation_status()
+
+
+def render_generation_status() -> None:
+    """Render a stable loading indicator with an inline stop action."""
+
+    with st.container(key="generation_status_bar"):
+        st.markdown(
+            f"""
+            <div class="generation-status-shell">
+              <div class="generation-status-text">
+                <span class="generation-spinner"></span>
+                <span class="generation-status-label">
+                  {html.escape(GENERATION_STATUS_TEXT)}
+                </span>
+              </div>
+              <div class="generation-stop-visual" aria-hidden="true"></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if st.button(
+            "Stop",
+            key="stop_generation_in_status",
+            help="Stop generation",
+        ):
             stop_generation()
             st.rerun()
 
-    time.sleep(GENERATION_POLL_SECONDS)
-    st.rerun()
+
+if hasattr(st, "fragment"):
+    render_generation_controls = st.fragment(run_every=GENERATION_POLL_SECONDS)(
+        _render_generation_controls_body
+    )
+else:
+    render_generation_controls = _render_generation_controls_body
+
+
+def render_busy_chat_composer() -> None:
+    """Render the normal composer locked while generation is active."""
+
+    st.chat_input(
+        BUSY_COMPOSER_TEXT,
+        disabled=True,
+        key="busy_chat_input",
+    )
+
+
+def render_random_prompt_button() -> None:
+    """Render a dice button that fills the chat input with a random starter."""
+
+    if st.button(
+        "Random prompt",
+        icon=":material/casino:",
+        key=RANDOM_PROMPT_BUTTON_KEY,
+        help="Generate a random question",
+        type="primary",
+    ):
+        set_random_prompt_in_chat_input()
+        st.rerun()
 
 
 def main() -> None:
@@ -760,10 +1019,13 @@ def main() -> None:
     generation_active = is_generation_active()
     if generation_active:
         render_generation_controls()
+        render_busy_chat_composer()
+        return
 
+    render_random_prompt_button()
     prompt = st.chat_input(
         "Ask about a famous person or place",
-        disabled=generation_active,
+        key=CHAT_INPUT_KEY,
     )
     if not prompt:
         return
