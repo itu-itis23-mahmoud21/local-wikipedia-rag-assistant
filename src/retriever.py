@@ -73,12 +73,23 @@ class RAGRetriever:
                 entity_type=entity_type_filter,
             )
 
-        semantic_results = self.vector_store.search(
-            query,
-            top_k=effective_top_k,
-            entity_type=entity_type_filter,
-            entity_names=entity_name_filter,
-        )
+        if route.route == ROUTE_BOTH and entity_name_filter:
+            semantic_results = _balanced_comparison_semantic_results(
+                vector_store=self.vector_store,
+                query=query,
+                top_k=effective_top_k,
+                entity_names=entity_name_filter,
+                entity_type=entity_type_filter,
+            )
+        else:
+            semantic_results = self.vector_store.search(
+                query,
+                top_k=effective_top_k,
+                entity_type=entity_type_filter,
+                entity_names=entity_name_filter,
+            )
+            semantic_results = _filter_low_information_chunks(semantic_results)
+
         results = _merge_results(intro_results, semantic_results, effective_top_k)
         results = deduplicate_retrieved_overlaps(results)
 
@@ -239,6 +250,65 @@ def _merge_results(
             break
 
     return merged_results
+
+
+def _balanced_comparison_semantic_results(
+    vector_store: Any,
+    query: str,
+    top_k: int,
+    entity_names: list[str],
+    entity_type: str | None,
+) -> list[VectorSearchResult]:
+    """Search each compared entity separately and interleave semantic chunks."""
+
+    per_entity_results: list[list[VectorSearchResult]] = []
+    for entity_name in entity_names:
+        results = vector_store.search(
+            query,
+            top_k=top_k,
+            entity_type=entity_type,
+            entity_names=[entity_name],
+        )
+        per_entity_results.append(_filter_low_information_chunks(results))
+
+    return _interleave_result_groups(per_entity_results, top_k)
+
+
+def _filter_low_information_chunks(
+    results: list[VectorSearchResult],
+) -> list[VectorSearchResult]:
+    """Remove very short semantic chunks when better chunks remain."""
+
+    filtered_results = [
+        result for result in results if not _is_low_information_chunk(result.text)
+    ]
+    return filtered_results or results
+
+
+def _is_low_information_chunk(text: str) -> bool:
+    """Return whether a semantic chunk is too short to be useful context."""
+
+    return len(_word_tokens_for_overlap(text)) < 8
+
+
+def _interleave_result_groups(
+    result_groups: list[list[VectorSearchResult]],
+    limit: int,
+) -> list[VectorSearchResult]:
+    """Interleave result groups while preserving each group's internal order."""
+
+    interleaved_results: list[VectorSearchResult] = []
+    max_group_length = max((len(group) for group in result_groups), default=0)
+
+    for index in range(max_group_length):
+        for group in result_groups:
+            if index >= len(group):
+                continue
+            interleaved_results.append(group[index])
+            if len(interleaved_results) >= limit:
+                return interleaved_results
+
+    return interleaved_results
 
 
 def _entity_key(result: VectorSearchResult) -> str:

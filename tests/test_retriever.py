@@ -87,7 +87,21 @@ class FakeVectorStore:
                 "entity_names": entity_names,
             }
         )
-        return self.results[:top_k]
+        results = self.results
+        if entity_type is not None:
+            results = [
+                result
+                for result in results
+                if result.metadata.get("entity_type") == entity_type
+            ]
+        if entity_names is not None:
+            allowed_names = {name.casefold() for name in entity_names}
+            results = [
+                result
+                for result in results
+                if str(result.metadata.get("entity", "")).casefold() in allowed_names
+            ]
+        return results[:top_k]
 
     def get_intro_chunks(
         self,
@@ -236,7 +250,7 @@ class TestRAGRetriever(unittest.TestCase):
         self.assertEqual(context.results[0].metadata["entity"], "Pyramids of Giza")
 
     def test_retrieve_both_query_applies_no_filter(self) -> None:
-        """Comparison queries should filter to the mentioned entities."""
+        """Comparison queries should search each mentioned entity separately."""
 
         vector_store = FakeVectorStore()
         retriever = RAGRetriever(vector_store=vector_store)
@@ -247,7 +261,12 @@ class TestRAGRetriever(unittest.TestCase):
         self.assertIsNone(vector_store.calls[0]["entity_type"])
         self.assertEqual(
             vector_store.calls[0]["entity_names"],
-            ["Albert Einstein", "Nikola Tesla"],
+            ["Albert Einstein"],
+        )
+        self.assertIsNone(vector_store.calls[1]["entity_type"])
+        self.assertEqual(
+            vector_store.calls[1]["entity_names"],
+            ["Nikola Tesla"],
         )
         self.assertEqual(
             vector_store.intro_calls[0]["entity_names"],
@@ -368,13 +387,105 @@ class TestRAGRetriever(unittest.TestCase):
 
         self.assertEqual(
             [result.vector_id for result in context.results],
-            ["chunk-1", "chunk-2"],
+            ["chunk-1"],
         )
 
     def test_comparison_query_includes_intro_chunks_for_both_entities(self) -> None:
         """Comparison retrieval should include one intro chunk per matched entity."""
 
         retriever = RAGRetriever(vector_store=FakeVectorStore())
+
+        context = retriever.retrieve("Compare Albert Einstein and Nikola Tesla", top_k=4)
+
+        self.assertEqual(
+            [result.vector_id for result in context.results[:2]],
+            ["chunk-intro-einstein", "chunk-intro-tesla"],
+        )
+
+    def test_comparison_query_performs_per_entity_semantic_searches(self) -> None:
+        """Comparison retrieval should avoid one broad mixed semantic search."""
+
+        vector_store = FakeVectorStore()
+        retriever = RAGRetriever(vector_store=vector_store)
+
+        retriever.retrieve("Compare Albert Einstein and Nikola Tesla", top_k=5)
+
+        self.assertEqual(
+            [call["entity_names"] for call in vector_store.calls],
+            [["Albert Einstein"], ["Nikola Tesla"]],
+        )
+
+    def test_comparison_retrieval_respects_top_k(self) -> None:
+        """Balanced comparison retrieval should still honor the public top_k."""
+
+        vector_store = FakeVectorStore()
+        vector_store.results = [
+            self._result("chunk-e-1", "Einstein semantic context with many useful words.", "Albert Einstein"),
+            self._result("chunk-e-2", "Einstein second semantic context with many useful words.", "Albert Einstein"),
+            self._result("chunk-t-1", "Tesla semantic context with many useful words.", "Nikola Tesla"),
+            self._result("chunk-t-2", "Tesla second semantic context with many useful words.", "Nikola Tesla"),
+        ]
+        retriever = RAGRetriever(vector_store=vector_store)
+
+        context = retriever.retrieve("Compare Albert Einstein and Nikola Tesla", top_k=3)
+
+        self.assertEqual(len(context.results), 3)
+        self.assertEqual(
+            [result.vector_id for result in context.results[:2]],
+            ["chunk-intro-einstein", "chunk-intro-tesla"],
+        )
+
+    def test_low_information_semantic_chunks_are_filtered_when_better_chunks_exist(
+        self,
+    ) -> None:
+        """Very short semantic chunks should be removed when useful chunks remain."""
+
+        vector_store = FakeVectorStore()
+        vector_store.results = [
+            self._result("chunk-short-e", "Rivalry with Lionel Messi", "Albert Einstein"),
+            self._result(
+                "chunk-good-e",
+                "Albert Einstein useful semantic context has enough words for retrieval.",
+                "Albert Einstein",
+            ),
+            self._result("chunk-short-t", "Rivalry with Albert Einstein", "Nikola Tesla"),
+            self._result(
+                "chunk-good-t",
+                "Nikola Tesla useful semantic context has enough words for retrieval.",
+                "Nikola Tesla",
+            ),
+        ]
+        retriever = RAGRetriever(vector_store=vector_store)
+
+        context = retriever.retrieve("Compare Albert Einstein and Nikola Tesla", top_k=5)
+        vector_ids = [result.vector_id for result in context.results]
+
+        self.assertIn("chunk-good-e", vector_ids)
+        self.assertIn("chunk-good-t", vector_ids)
+        self.assertNotIn("chunk-short-e", vector_ids)
+        self.assertNotIn("chunk-short-t", vector_ids)
+
+    def test_low_information_filtering_does_not_remove_intro_chunks(self) -> None:
+        """Intro chunks should remain even when their text is short."""
+
+        vector_store = FakeVectorStore()
+        vector_store.intro_results = [
+            self._result("chunk-intro-einstein", "Einstein", "Albert Einstein"),
+            self._result("chunk-intro-tesla", "Tesla", "Nikola Tesla"),
+        ]
+        vector_store.results = [
+            self._result(
+                "chunk-good-e",
+                "Albert Einstein useful semantic context has enough words for retrieval.",
+                "Albert Einstein",
+            ),
+            self._result(
+                "chunk-good-t",
+                "Nikola Tesla useful semantic context has enough words for retrieval.",
+                "Nikola Tesla",
+            ),
+        ]
+        retriever = RAGRetriever(vector_store=vector_store)
 
         context = retriever.retrieve("Compare Albert Einstein and Nikola Tesla", top_k=4)
 
