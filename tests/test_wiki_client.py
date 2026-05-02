@@ -82,6 +82,51 @@ class TestWikipediaHelpers(unittest.TestCase):
         self.assertIn("references earlier experiments", normalized)
         self.assertIn("Second paragraph.", normalized)
 
+    def test_normalize_wikipedia_text_removes_publications_section(self) -> None:
+        """Standalone Publications should remove trailing low-value content."""
+
+        text = "Useful biography text.\n\nPublications\nList item"
+
+        normalized = normalize_wikipedia_text(text)
+
+        self.assertEqual(normalized, "Useful biography text.")
+        self.assertNotIn("List item", normalized)
+
+    def test_normalize_wikipedia_text_removes_in_popular_culture_section(self) -> None:
+        """Standalone In popular culture should remove trailing low-value content."""
+
+        text = "Useful article text.\n\nIn popular culture\nFilm list"
+
+        normalized = normalize_wikipedia_text(text)
+
+        self.assertEqual(normalized, "Useful article text.")
+        self.assertNotIn("Film list", normalized)
+
+    def test_normalize_wikipedia_text_removes_film_and_television_section(self) -> None:
+        """Standalone Film and television should remove trailing low-value content."""
+
+        text = "Useful article text.\n\nFilm and television\nDocumentary list"
+
+        normalized = normalize_wikipedia_text(text)
+
+        self.assertEqual(normalized, "Useful article text.")
+        self.assertNotIn("Documentary list", normalized)
+
+    def test_normalize_wikipedia_text_keeps_sentences_with_new_low_value_words(
+        self,
+    ) -> None:
+        """Normal sentences containing cleanup words should remain."""
+
+        text = (
+            "The article discusses popular culture in one sentence.\n\n"
+            "Her publications influenced later writers."
+        )
+
+        normalized = normalize_wikipedia_text(text)
+
+        self.assertIn("popular culture in one sentence", normalized)
+        self.assertIn("publications influenced", normalized)
+
     def test_remove_unwanted_wikipedia_sections_is_case_insensitive(self) -> None:
         """Footer heading matching should ignore case."""
 

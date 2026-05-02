@@ -29,6 +29,16 @@ UNWANTED_SECTION_HEADINGS = {
     "bibliography",
     "sources",
     "citations",
+    "publications",
+    "selected publications",
+    "film and television",
+    "in popular culture",
+    "popular culture",
+    "commemoration",
+    "honours",
+    "honors",
+    "awards and honours",
+    "awards and honors",
 }
 
 

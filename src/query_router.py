@@ -63,6 +63,41 @@ BROAD_MIXED_CLUES = (
     "known for",
 )
 
+MIN_ALIAS_LENGTH = 3
+ALIAS_STOPWORDS = {
+    "about",
+    "and",
+    "are",
+    "associated",
+    "born",
+    "built",
+    "city",
+    "compare",
+    "country",
+    "difference",
+    "famous",
+    "for",
+    "from",
+    "great",
+    "how",
+    "known",
+    "located",
+    "monument",
+    "museum",
+    "person",
+    "place",
+    "president",
+    "the",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "why",
+    "with",
+}
+SURNAME_PARTICLES = {"da", "de", "del", "la", "le", "van", "von"}
+
 
 @dataclass(frozen=True)
 class QueryRoute:
@@ -81,21 +116,41 @@ def normalize_query(text: str) -> str:
 
 
 def find_entity_mentions(query: str, candidates: list[str]) -> list[str]:
-    """Return configured entity names mentioned in the query."""
+    """Return configured entity names mentioned in the query or by safe alias."""
 
     normalized_query = normalize_query(query)
+    aliases = build_entity_aliases(candidates)
     mentions: list[str] = []
     seen: set[str] = set()
 
-    for candidate in candidates:
-        normalized_candidate = normalize_query(candidate)
-        if not normalized_candidate or normalized_candidate in seen:
+    for alias, canonical_name in aliases.items():
+        normalized_canonical = normalize_query(canonical_name)
+        if normalized_canonical in seen:
             continue
-        if _contains_phrase(normalized_query, normalized_candidate):
-            mentions.append(candidate)
-            seen.add(normalized_candidate)
+        if _contains_phrase(normalized_query, alias):
+            mentions.append(canonical_name)
+            seen.add(normalized_canonical)
 
     return mentions
+
+
+def build_entity_aliases(candidates: list[str]) -> dict[str, str]:
+    """Build safe, unambiguous aliases that map to canonical entity names."""
+
+    alias_candidates: dict[str, list[str]] = {}
+    allow_partial_aliases = _all_candidates_are_people(candidates)
+
+    for candidate in candidates:
+        for alias in _candidate_aliases(candidate, allow_partial_aliases):
+            alias_candidates.setdefault(alias, []).append(candidate)
+
+    aliases: dict[str, str] = {}
+    for alias, names in alias_candidates.items():
+        unique_names = list(dict.fromkeys(names))
+        if len(unique_names) == 1:
+            aliases[alias] = unique_names[0]
+
+    return aliases
 
 
 def route_query(query: str) -> QueryRoute:
@@ -191,3 +246,56 @@ def _contains_any_phrase(text: str, phrases: tuple[str, ...]) -> bool:
     """Return whether any phrase appears in text."""
 
     return any(phrase in text for phrase in phrases)
+
+
+def _candidate_aliases(candidate: str, allow_partial_aliases: bool) -> list[str]:
+    """Return normalized alias candidates for one configured entity."""
+
+    normalized_candidate = normalize_query(candidate)
+    aliases = [normalized_candidate]
+
+    if allow_partial_aliases:
+        tokens = _alias_tokens(normalized_candidate)
+        if tokens:
+            aliases.extend([tokens[0], tokens[-1]])
+            aliases.extend(_particle_aliases(tokens))
+
+    safe_aliases: list[str] = []
+    for alias in aliases:
+        if alias not in safe_aliases and _is_safe_alias(alias):
+            safe_aliases.append(alias)
+
+    return safe_aliases
+
+
+def _alias_tokens(normalized_name: str) -> list[str]:
+    """Return simple alphanumeric tokens from a normalized entity name."""
+
+    return re.findall(r"\w+", normalized_name)
+
+
+def _particle_aliases(tokens: list[str]) -> list[str]:
+    """Return multi-word surname aliases such as 'da vinci' or 'van gogh'."""
+
+    aliases: list[str] = []
+    for index, token in enumerate(tokens[:-1]):
+        if token in SURNAME_PARTICLES:
+            aliases.append(" ".join(tokens[index:]))
+    return aliases
+
+
+def _is_safe_alias(alias: str) -> bool:
+    """Return whether an alias is specific enough for query matching."""
+
+    if len(alias) < MIN_ALIAS_LENGTH:
+        return False
+    if alias in ALIAS_STOPWORDS:
+        return False
+    return True
+
+
+def _all_candidates_are_people(candidates: list[str]) -> bool:
+    """Return whether the provided candidates all come from the people list."""
+
+    people = set(get_people())
+    return bool(candidates) and all(candidate in people for candidate in candidates)

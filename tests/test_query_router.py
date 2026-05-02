@@ -7,6 +7,7 @@ from src.query_router import (
     ROUTE_PERSON,
     ROUTE_PLACE,
     ROUTE_UNKNOWN,
+    build_entity_aliases,
     find_entity_mentions,
     route_query,
 )
@@ -104,3 +105,78 @@ class TestQueryRouter(unittest.TestCase):
         )
 
         self.assertEqual(mentions, ["Albert Einstein"])
+
+    def test_last_name_alias_einstein_routes_person(self) -> None:
+        """A safe last-name alias should match the configured person."""
+
+        route = route_query("Who is Einstein?")
+
+        self.assertEqual(route.route, ROUTE_PERSON)
+        self.assertIn("Albert Einstein", route.matched_people)
+
+    def test_last_name_alias_curie_routes_person(self) -> None:
+        """Curie should resolve to Marie Curie."""
+
+        route = route_query("Who is Curie?")
+
+        self.assertEqual(route.route, ROUTE_PERSON)
+        self.assertIn("Marie Curie", route.matched_people)
+
+    def test_last_name_alias_shakespeare_routes_person(self) -> None:
+        """Shakespeare should resolve to William Shakespeare."""
+
+        route = route_query("Who is Shakespeare?")
+
+        self.assertEqual(route.route, ROUTE_PERSON)
+        self.assertIn("William Shakespeare", route.matched_people)
+
+    def test_last_name_alias_lovelace_routes_person(self) -> None:
+        """Lovelace should resolve to Ada Lovelace."""
+
+        route = route_query("Who is Lovelace?")
+
+        self.assertEqual(route.route, ROUTE_PERSON)
+        self.assertIn("Ada Lovelace", route.matched_people)
+
+    def test_multi_word_alias_da_vinci_routes_person(self) -> None:
+        """A multi-word surname alias should resolve to Leonardo da Vinci."""
+
+        route = route_query("Who is da Vinci?")
+
+        self.assertEqual(route.route, ROUTE_PERSON)
+        self.assertIn("Leonardo da Vinci", route.matched_people)
+
+    def test_unambiguous_first_name_alias_routes_person(self) -> None:
+        """Unambiguous first-name aliases should resolve to the configured name."""
+
+        route = route_query("Who is Ada?")
+
+        self.assertEqual(route.route, ROUTE_PERSON)
+        self.assertIn("Ada Lovelace", route.matched_people)
+
+    def test_alias_matching_is_case_insensitive(self) -> None:
+        """Alias matching should ignore case."""
+
+        route = route_query("who is eInStEiN?")
+
+        self.assertEqual(route.route, ROUTE_PERSON)
+        self.assertIn("Albert Einstein", route.matched_people)
+
+    def test_alias_and_full_name_do_not_duplicate_mentions(self) -> None:
+        """A full name and alias in one query should produce one canonical mention."""
+
+        mentions = find_entity_mentions(
+            "Albert Einstein and Einstein",
+            ["Albert Einstein"],
+        )
+
+        self.assertEqual(mentions, ["Albert Einstein"])
+
+    def test_ambiguous_alias_is_not_used(self) -> None:
+        """Single-token aliases should be ignored when they are ambiguous."""
+
+        aliases = build_entity_aliases(["Michael Jackson", "Michael Jordan"])
+
+        self.assertNotIn("michael", aliases)
+        self.assertEqual(aliases["jackson"], "Michael Jackson")
+        self.assertEqual(aliases["jordan"], "Michael Jordan")

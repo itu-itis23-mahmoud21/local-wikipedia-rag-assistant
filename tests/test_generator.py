@@ -114,6 +114,36 @@ class TestOllamaAnswerGenerator(unittest.TestCase):
 
         self.assertIn("I don't know.", prompt)
 
+    def test_build_prompt_guides_which_person_place_questions(self) -> None:
+        """Prompt should prefer the main retrieved entity for which questions."""
+
+        prompt = OllamaAnswerGenerator().build_prompt(
+            "Which person is associated with computing?",
+            "[Source 1] entity=Ada Lovelace, type=person\nAda Lovelace text.",
+        )
+
+        self.assertIn("which person", prompt)
+        self.assertIn("which place", prompt)
+        self.assertIn("main configured entity", prompt)
+
+    def test_build_prompt_says_not_to_list_every_mentioned_name(self) -> None:
+        """Prompt should avoid listing names merely mentioned in context."""
+
+        prompt = OllamaAnswerGenerator().build_prompt("Question?", "Context.")
+
+        self.assertIn("Do not list every person or place merely mentioned", prompt)
+
+    def test_build_prompt_keeps_comparison_facts_separated(self) -> None:
+        """Prompt should tell the model not to mix comparison facts."""
+
+        prompt = OllamaAnswerGenerator().build_prompt(
+            "Compare Albert Einstein and Marie Curie.",
+            "Context.",
+        )
+
+        self.assertIn("Keep facts separated by entity", prompt)
+        self.assertIn("do not transfer facts from one entity to another", prompt)
+
     def test_blank_query_raises_value_error(self) -> None:
         """Blank queries should be rejected."""
 
