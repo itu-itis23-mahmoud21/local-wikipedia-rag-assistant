@@ -6,6 +6,7 @@ functions.
 """
 
 from dataclasses import dataclass
+import re
 
 
 @dataclass(frozen=True)
@@ -72,6 +73,34 @@ PLACES: list[str] = [
     "Topkapı Palace",
 ]
 
+PLACE_LOCATION_HINTS: dict[str, list[str]] = {
+    "Eiffel Tower": ["france", "paris"],
+    "Great Wall of China": ["china"],
+    "Taj Mahal": ["india", "agra"],
+    "Grand Canyon": ["united states", "usa", "u.s.", "arizona"],
+    "Machu Picchu": ["peru", "cusco"],
+    "Colosseum": ["italy", "rome"],
+    "Hagia Sophia": ["turkey", "türkiye", "istanbul"],
+    "Statue of Liberty": ["united states", "usa", "u.s.", "new york"],
+    "Pyramids of Giza": ["egypt", "giza", "cairo"],
+    "Mount Everest": ["nepal", "china", "tibet", "himalayas"],
+    "Burj Khalifa": ["united arab emirates", "uae", "dubai"],
+    "Big Ben": ["united kingdom", "uk", "england", "london"],
+    "Sydney Opera House": ["australia", "sydney"],
+    "Sagrada Família": ["spain", "barcelona"],
+    "Stonehenge": ["united kingdom", "uk", "england", "wiltshire"],
+    "Petra": ["jordan"],
+    "Angkor Wat": ["cambodia", "siem reap"],
+    "Acropolis of Athens": ["greece", "athens"],
+    "Louvre": ["france", "paris"],
+    "Vatican City": ["vatican", "vatican city", "rome", "italy"],
+    "Mount Fuji": ["japan"],
+    "Niagara Falls": ["canada", "united states", "usa", "u.s.", "new york", "ontario"],
+    "Alhambra": ["spain", "granada"],
+    "Blue Mosque": ["turkey", "türkiye", "istanbul"],
+    "Topkapı Palace": ["turkey", "türkiye", "istanbul"],
+}
+
 ENTITY_TYPES = ("person", "place")
 
 
@@ -101,6 +130,23 @@ def get_entity_records() -> list[Entity]:
     ]
 
 
+def get_places_for_location_query(query: str) -> list[str]:
+    """Return configured places whose location hints appear in a query."""
+
+    normalized_query = _normalize_location_text(query)
+    if not normalized_query:
+        return []
+
+    matched_places: list[str] = []
+    for place in PLACES:
+        for hint in PLACE_LOCATION_HINTS.get(place, []):
+            if _contains_location_hint(normalized_query, hint):
+                matched_places.append(place)
+                break
+
+    return matched_places
+
+
 def get_entity_type(name: str) -> str | None:
     """Return the configured entity type for a name, case-insensitively."""
 
@@ -121,7 +167,7 @@ def is_known_entity(name: str) -> bool:
 
 
 def validate_entities() -> None:
-    """Validate entity counts, names, and uniqueness."""
+    """Validate entity counts, names, uniqueness, and place metadata."""
 
     if len(PEOPLE) != 25:
         raise ValueError(f"Expected 25 people, found {len(PEOPLE)}.")
@@ -145,11 +191,60 @@ def validate_entities() -> None:
         duplicate_text = ", ".join(duplicates)
         raise ValueError(f"Duplicate entity names found: {duplicate_text}.")
 
+    _validate_place_location_hints()
+
 
 def _normalize_name(name: str) -> str:
     """Normalize entity names for case-insensitive matching."""
 
     return name.strip().casefold()
+
+
+def _validate_place_location_hints() -> None:
+    """Validate that every configured place has non-blank location hints."""
+
+    place_names = set(PLACES)
+    hint_names = set(PLACE_LOCATION_HINTS)
+    unknown_places = sorted(hint_names - place_names)
+    missing_places = sorted(place_names - hint_names)
+
+    if unknown_places:
+        raise ValueError(
+            "Location hints include unknown places: "
+            f"{', '.join(unknown_places)}."
+        )
+    if missing_places:
+        raise ValueError(
+            "Location hints are missing configured places: "
+            f"{', '.join(missing_places)}."
+        )
+
+    blank_hints = [
+        place
+        for place, hints in PLACE_LOCATION_HINTS.items()
+        if not hints or any(not hint.strip() for hint in hints)
+    ]
+    if blank_hints:
+        raise ValueError(
+            "Location hints must not be blank for places: "
+            f"{', '.join(blank_hints)}."
+        )
+
+
+def _normalize_location_text(text: str) -> str:
+    """Normalize location query/hint text for deterministic matching."""
+
+    return " ".join(text.casefold().strip().split())
+
+
+def _contains_location_hint(normalized_query: str, hint: str) -> bool:
+    """Return whether a normalized location hint appears with safe boundaries."""
+
+    normalized_hint = _normalize_location_text(hint)
+    if not normalized_hint:
+        return False
+    pattern = rf"(?<!\w){re.escape(normalized_hint)}(?!\w)"
+    return re.search(pattern, normalized_query) is not None
 
 
 validate_entities()

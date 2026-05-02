@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 
-from src.entities import get_people, get_places
+from src.entities import get_people, get_places, get_places_for_location_query
 
 
 ROUTE_PERSON = "person"
@@ -62,13 +62,6 @@ BROAD_MIXED_CLUES = (
     "associated with",
     "known for",
 )
-
-LOCATION_ENTITY_HINTS = {
-    "turkey": ["Hagia Sophia", "Blue Mosque", "Topkapı Palace"],
-    "türkiye": ["Hagia Sophia", "Blue Mosque", "Topkapı Palace"],
-    "turkish": ["Hagia Sophia", "Blue Mosque", "Topkapı Palace"],
-    "istanbul": ["Hagia Sophia", "Blue Mosque", "Topkapı Palace"],
-}
 
 MIN_ALIAS_LENGTH = 3
 ALIAS_STOPWORDS = {
@@ -237,27 +230,9 @@ def route_query(query: str) -> QueryRoute:
 
 
 def get_location_entity_hints(query: str) -> list[str]:
-    """Return configured place hints implied by a location term in the query."""
+    """Return configured place hints implied by location terms in the query."""
 
-    normalized_query = normalize_query(query)
-    if not normalized_query:
-        return []
-
-    configured_places = set(get_places())
-    hinted_entities: list[str] = []
-    seen: set[str] = set()
-
-    for location_term, entity_names in LOCATION_ENTITY_HINTS.items():
-        if not _contains_phrase(normalized_query, normalize_query(location_term)):
-            continue
-
-        for entity_name in entity_names:
-            if entity_name not in configured_places or entity_name in seen:
-                continue
-            hinted_entities.append(entity_name)
-            seen.add(entity_name)
-
-    return hinted_entities
+    return get_places_for_location_query(query)
 
 
 def _contains_phrase(text: str, phrase: str) -> bool:

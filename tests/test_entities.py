@@ -125,3 +125,37 @@ class TestEntities(unittest.TestCase):
         """The current configuration should pass validation."""
 
         entities.validate_entities()
+
+    def test_place_location_hints_cover_configured_places(self) -> None:
+        """Every configured place should have location hints."""
+
+        self.assertEqual(set(entities.PLACE_LOCATION_HINTS), set(entities.PLACES))
+        for place in entities.PLACES:
+            with self.subTest(place=place):
+                hints = entities.PLACE_LOCATION_HINTS[place]
+                self.assertTrue(hints)
+                self.assertTrue(all(hint.strip() for hint in hints))
+
+    def test_get_places_for_location_query_matches_egypt(self) -> None:
+        """Egypt location queries should resolve to Pyramids of Giza."""
+
+        self.assertEqual(
+            entities.get_places_for_location_query("Which famous place is in Egypt?"),
+            ["Pyramids of Giza"],
+        )
+
+    def test_get_places_for_location_query_matches_paris_in_place_order(self) -> None:
+        """Paris location queries should return configured Paris places in order."""
+
+        self.assertEqual(
+            entities.get_places_for_location_query("Which famous place is in Paris?"),
+            ["Eiffel Tower", "Louvre"],
+        )
+
+    def test_get_places_for_location_query_matches_new_york(self) -> None:
+        """New York location queries should return configured New York places."""
+
+        self.assertEqual(
+            entities.get_places_for_location_query("Which landmark is in New York?"),
+            ["Statue of Liberty", "Niagara Falls"],
+        )

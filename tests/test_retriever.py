@@ -207,6 +207,34 @@ class TestRAGRetriever(unittest.TestCase):
             any(result.metadata["entity"] in hinted_entities for result in context.results)
         )
 
+    def test_egypt_place_query_uses_location_entity_hints(self) -> None:
+        """Location-only Egypt questions should retrieve Pyramids of Giza."""
+
+        vector_store = FakeVectorStore()
+        vector_store.intro_results = [
+            self._result(
+                "chunk-pyramids-intro",
+                "The Pyramids of Giza are in Egypt.",
+                "Pyramids of Giza",
+            )
+        ]
+        vector_store.results = [
+            self._result(
+                "chunk-pyramids",
+                "Pyramids of Giza Egypt context.",
+                "Pyramids of Giza",
+            )
+        ]
+        retriever = RAGRetriever(vector_store=vector_store)
+
+        context = retriever.retrieve("Which famous place is in Egypt?")
+
+        self.assertEqual(context.route.route, ROUTE_PLACE)
+        self.assertEqual(vector_store.calls[0]["entity_type"], "place")
+        self.assertEqual(vector_store.calls[0]["entity_names"], ["Pyramids of Giza"])
+        self.assertEqual(vector_store.intro_calls[0]["entity_names"], ["Pyramids of Giza"])
+        self.assertEqual(context.results[0].metadata["entity"], "Pyramids of Giza")
+
     def test_retrieve_both_query_applies_no_filter(self) -> None:
         """Comparison queries should filter to the mentioned entities."""
 

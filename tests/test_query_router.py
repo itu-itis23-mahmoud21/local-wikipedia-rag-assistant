@@ -96,6 +96,27 @@ class TestQueryRouter(unittest.TestCase):
             ["Hagia Sophia", "Blue Mosque", "Topkapı Palace"],
         )
 
+    def test_egypt_location_hint_returns_configured_place(self) -> None:
+        """Egypt should suggest Pyramids of Giza."""
+
+        hints = get_location_entity_hints("Which famous place is in Egypt?")
+
+        self.assertEqual(hints, ["Pyramids of Giza"])
+
+    def test_paris_location_hint_returns_configured_places(self) -> None:
+        """Paris should suggest configured Paris places in place-list order."""
+
+        hints = get_location_entity_hints("Which famous place is in Paris?")
+
+        self.assertEqual(hints, ["Eiffel Tower", "Louvre"])
+
+    def test_new_york_location_hint_returns_configured_places(self) -> None:
+        """New York should suggest configured New York places."""
+
+        hints = get_location_entity_hints("Which landmark is in New York?")
+
+        self.assertEqual(hints, ["Statue of Liberty", "Niagara Falls"])
+
     def test_person_associated_with_electricity_routes_person(self) -> None:
         """A person clue should route to person."""
 
