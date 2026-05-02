@@ -9,6 +9,7 @@ from src.query_router import (
     ROUTE_UNKNOWN,
     build_entity_aliases,
     find_entity_mentions,
+    get_location_entity_hints,
     route_query,
 )
 
@@ -73,6 +74,27 @@ class TestQueryRouter(unittest.TestCase):
         route = route_query("Which famous place is located in Turkey?")
 
         self.assertEqual(route.route, ROUTE_PLACE)
+        self.assertEqual(route.matched_places, [])
+
+    def test_turkey_location_hint_returns_configured_places(self) -> None:
+        """Turkey location terms should suggest configured Turkish places."""
+
+        hints = get_location_entity_hints("Which famous place is located in Turkey?")
+
+        self.assertEqual(
+            hints,
+            ["Hagia Sophia", "Blue Mosque", "Topkapı Palace"],
+        )
+
+    def test_istanbul_location_hint_returns_configured_places(self) -> None:
+        """Istanbul should suggest configured Turkish places."""
+
+        hints = get_location_entity_hints("Which landmarks are in Istanbul?")
+
+        self.assertEqual(
+            hints,
+            ["Hagia Sophia", "Blue Mosque", "Topkapı Palace"],
+        )
 
     def test_person_associated_with_electricity_routes_person(self) -> None:
         """A person clue should route to person."""

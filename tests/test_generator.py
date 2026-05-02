@@ -144,6 +144,42 @@ class TestOllamaAnswerGenerator(unittest.TestCase):
         self.assertIn("Keep facts separated by entity", prompt)
         self.assertIn("do not transfer facts from one entity to another", prompt)
 
+    def test_build_prompt_prevents_fact_transfer_between_compared_entities(self) -> None:
+        """Prompt should say one-entity facts must stay under that entity."""
+
+        prompt = OllamaAnswerGenerator().build_prompt(
+            "Compare Lionel Messi and Cristiano Ronaldo.",
+            "[Source 1] entity=Lionel Messi, type=person\nMessi won a trophy.",
+        )
+
+        self.assertIn("If a fact appears only in one entity's source/context", prompt)
+        self.assertIn("do not assign it to the other entity", prompt)
+        self.assertIn("Do not invent balanced statistics", prompt)
+
+    def test_build_prompt_prefers_structured_comparison_output(self) -> None:
+        """Prompt should guide comparison answers into separated sections."""
+
+        prompt = OllamaAnswerGenerator().build_prompt(
+            "Compare the Eiffel Tower and the Statue of Liberty.",
+            "Context.",
+        )
+
+        self.assertIn("Entity A:", prompt)
+        self.assertIn("Entity B:", prompt)
+        self.assertIn("Comparison:", prompt)
+
+    def test_build_prompt_discourages_irrelevant_unsupported_context_summary(self) -> None:
+        """Unsupported answers should not list random retrieved entities."""
+
+        prompt = OllamaAnswerGenerator().build_prompt(
+            "Who is the president of Mars?",
+            "[Source 1] entity=Lionel Messi, type=person\nUnrelated context.",
+        )
+
+        self.assertIn("do not list unrelated retrieved entities", prompt)
+        self.assertIn("summarize irrelevant context", prompt)
+        self.assertIn("Do not say \"it only mentions X\"", prompt)
+
     def test_blank_query_raises_value_error(self) -> None:
         """Blank queries should be rejected."""
 

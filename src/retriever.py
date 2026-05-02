@@ -12,6 +12,7 @@ from src.query_router import (
     ROUTE_BOTH,
     ROUTE_PERSON,
     ROUTE_PLACE,
+    get_location_entity_hints,
     route_query,
 )
 from src.vector_store import ChromaVectorStore, VectorSearchResult
@@ -61,6 +62,9 @@ class RAGRetriever:
         route = route_query(query)
         entity_type_filter = _entity_type_filter_for_route(route)
         entity_name_filter = _entity_names_for_route(route)
+        if entity_name_filter is None:
+            entity_name_filter = _location_entity_hints_for_route(query, route)
+
         intro_results = []
         if entity_name_filter:
             intro_results = self.vector_store.get_intro_chunks(
@@ -204,6 +208,16 @@ def _entity_names_for_route(route: QueryRoute) -> list[str] | None:
         matched_entities = [*route.matched_people, *route.matched_places]
         return matched_entities or None
     return None
+
+
+def _location_entity_hints_for_route(query: str, route: QueryRoute) -> list[str] | None:
+    """Return deterministic place hints for location-only place questions."""
+
+    if route.route != ROUTE_PLACE or route.matched_places:
+        return None
+
+    hinted_entities = get_location_entity_hints(query)
+    return hinted_entities or None
 
 
 def _merge_results(

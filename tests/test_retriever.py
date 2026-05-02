@@ -175,6 +175,38 @@ class TestRAGRetriever(unittest.TestCase):
         self.assertEqual(vector_store.calls[0]["entity_names"], ["Eiffel Tower"])
         self.assertEqual(vector_store.intro_calls[0]["entity_type"], "place")
 
+    def test_turkey_place_query_uses_location_entity_hints(self) -> None:
+        """Location-only Turkey questions should retrieve configured Turkish places."""
+
+        vector_store = FakeVectorStore()
+        vector_store.intro_results = [
+            self._result("chunk-hagia-intro", "Hagia Sophia is in Istanbul.", "Hagia Sophia"),
+            self._result("chunk-blue-intro", "The Blue Mosque is in Istanbul.", "Blue Mosque"),
+            self._result(
+                "chunk-topkapi-intro",
+                "Topkapı Palace is in Istanbul.",
+                "Topkapı Palace",
+            ),
+        ]
+        vector_store.results = [
+            self._result("chunk-hagia", "Hagia Sophia Turkey context.", "Hagia Sophia"),
+            self._result("chunk-blue", "Blue Mosque Turkey context.", "Blue Mosque"),
+            self._result("chunk-topkapi", "Topkapı Palace Turkey context.", "Topkapı Palace"),
+        ]
+        retriever = RAGRetriever(vector_store=vector_store)
+
+        context = retriever.retrieve("Which famous place is located in Turkey?")
+
+        hinted_entities = ["Hagia Sophia", "Blue Mosque", "Topkapı Palace"]
+        self.assertEqual(context.route.route, ROUTE_PLACE)
+        self.assertEqual(vector_store.calls[0]["entity_type"], "place")
+        self.assertEqual(vector_store.calls[0]["entity_names"], hinted_entities)
+        self.assertEqual(vector_store.intro_calls[0]["entity_names"], hinted_entities)
+        self.assertEqual(vector_store.intro_calls[0]["entity_type"], "place")
+        self.assertTrue(
+            any(result.metadata["entity"] in hinted_entities for result in context.results)
+        )
+
     def test_retrieve_both_query_applies_no_filter(self) -> None:
         """Comparison queries should filter to the mentioned entities."""
 
