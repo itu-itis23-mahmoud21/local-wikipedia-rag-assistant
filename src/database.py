@@ -232,7 +232,7 @@ class MetadataDB:
                     (entity_type,),
                 ).fetchall()
 
-        return [_row_to_dict(row) for row in rows]
+        return _rows_to_dicts(rows)
 
     def create_document(
         self,
@@ -278,7 +278,10 @@ class MetadataDB:
                     now,
                 ),
             )
-            document_id = int(cursor.lastrowid)
+            document_id = _lastrowid_to_int(
+                cursor.lastrowid,
+                "creating document",
+            )
             connection.commit()
 
         return document_id
@@ -346,7 +349,7 @@ class MetadataDB:
                     (status.strip(),),
                 ).fetchall()
 
-        return [_row_to_dict(row) for row in rows]
+        return _rows_to_dicts(rows)
 
     def add_chunk(
         self,
@@ -388,7 +391,7 @@ class MetadataDB:
                     now,
                 ),
             )
-            chunk_id = int(cursor.lastrowid)
+            chunk_id = _lastrowid_to_int(cursor.lastrowid, "adding chunk")
             connection.commit()
 
         return chunk_id
@@ -421,7 +424,7 @@ class MetadataDB:
         with closing(self.connect()) as connection:
             rows = connection.execute(query, parameters).fetchall()
 
-        return [_row_to_dict(row) for row in rows]
+        return _rows_to_dicts(rows)
 
     def delete_chunks(self, document_id: int | None = None) -> int:
         """Delete chunks globally or for one document and return rows deleted."""
@@ -507,7 +510,10 @@ class MetadataDB:
                 """,
                 (now, "running", total_entities, notes),
             )
-            run_id = int(cursor.lastrowid)
+            run_id = _lastrowid_to_int(
+                cursor.lastrowid,
+                "starting ingestion run",
+            )
             connection.commit()
 
         return run_id
@@ -619,6 +625,20 @@ def _row_to_dict(row: sqlite3.Row | None) -> dict | None:
     if row is None:
         return None
     return dict(row)
+
+
+def _rows_to_dicts(rows: list[sqlite3.Row]) -> list[dict]:
+    """Convert non-null SQLite rows to plain dictionaries."""
+
+    return [dict(row) for row in rows]
+
+
+def _lastrowid_to_int(lastrowid: int | None, operation: str) -> int:
+    """Return a SQLite inserted row id or raise a clear runtime error."""
+
+    if lastrowid is None:
+        raise RuntimeError(f"Failed to get inserted row id after {operation}.")
+    return int(lastrowid)
 
 
 def _count_rows(

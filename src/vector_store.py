@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from src import config
 from src.database import MetadataDB
@@ -324,7 +325,7 @@ def _normalize_entity_names(entity_names: list[str] | None) -> list[str]:
     return names
 
 
-def _parse_search_results(result: dict) -> list[VectorSearchResult]:
+def _parse_search_results(result: Any) -> list[VectorSearchResult]:
     """Parse Chroma query output into VectorSearchResult objects."""
 
     ids = _first_result_list(result.get("ids"))
@@ -349,7 +350,7 @@ def _parse_search_results(result: dict) -> list[VectorSearchResult]:
     return search_results
 
 
-def _parse_get_results(result: dict) -> list[VectorSearchResult]:
+def _parse_get_results(result: Any) -> list[VectorSearchResult]:
     """Parse Chroma get output into VectorSearchResult objects."""
 
     ids = _first_result_list(result.get("ids"))
@@ -383,7 +384,7 @@ def _intro_sort_key(result: VectorSearchResult) -> tuple[str, int]:
     return (entity_name, chunk_index)
 
 
-def _first_result_list(value: object) -> list:
+def _first_result_list(value: Any) -> list[Any]:
     """Return the first nested Chroma result list or an empty list."""
 
     if not value:
