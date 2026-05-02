@@ -7,6 +7,7 @@ Chroma's built-in embedding functions are intentionally not used.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -144,6 +145,7 @@ class ChromaVectorStore:
         chunks: list[dict],
         db: MetadataDB,
         limit: int | None = None,
+        progress_callback: Callable[[int, int, dict], None] | None = None,
     ) -> int:
         """Add SQLite chunk rows to Chroma and update their vector ids."""
 
@@ -152,6 +154,7 @@ class ChromaVectorStore:
 
         selected_chunks = chunks[:limit] if limit is not None else chunks
         added_count = 0
+        total_count = len(selected_chunks)
 
         for chunk in selected_chunks:
             chunk_id = _require_int(chunk, "id")
@@ -172,6 +175,8 @@ class ChromaVectorStore:
             if hasattr(db, "update_chunk_vector_id"):
                 db.update_chunk_vector_id(chunk_id, vector_id)
             added_count += 1
+            if progress_callback is not None:
+                progress_callback(added_count, total_count, chunk)
 
         return added_count
 

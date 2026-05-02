@@ -456,6 +456,33 @@ class MetadataDB:
             )
             connection.commit()
 
+    def clear_chunk_vector_ids(self, document_id: int | None = None) -> int:
+        """Clear stored vector ids globally or for one document."""
+
+        with closing(self.connect()) as connection:
+            if document_id is None:
+                cursor = connection.execute(
+                    """
+                    UPDATE chunks
+                    SET vector_id = NULL
+                    WHERE vector_id IS NOT NULL;
+                    """
+                )
+            else:
+                cursor = connection.execute(
+                    """
+                    UPDATE chunks
+                    SET vector_id = NULL
+                    WHERE document_id = ?
+                      AND vector_id IS NOT NULL;
+                    """,
+                    (document_id,),
+                )
+            cleared_count = int(cursor.rowcount)
+            connection.commit()
+
+        return cleared_count
+
     def start_ingestion_run(
         self,
         total_entities: int,

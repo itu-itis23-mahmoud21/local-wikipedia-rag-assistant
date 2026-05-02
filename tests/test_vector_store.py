@@ -519,6 +519,40 @@ class TestChromaVectorStore(unittest.TestCase):
         self.assertEqual(store.count(), 1)
         self.assertEqual(updated_chunk["vector_id"], f"chunk-{chunk_id}")
 
+    def test_add_chunks_calls_progress_callback(self) -> None:
+        """add_chunks should report successful progress after each chunk."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db = MetadataDB(Path(temp_dir) / "metadata.sqlite")
+            db.init_schema()
+            entity_id = db.upsert_entity("Albert Einstein", "person")
+            document_id = db.create_document(
+                entity_id,
+                "Albert Einstein",
+                "https://example.test/wiki",
+                None,
+                None,
+                "success",
+            )
+            db.add_chunk(document_id, entity_id, 0, "first chunk")
+            db.add_chunk(document_id, entity_id, 1, "second chunk")
+            chunks = db.list_chunks()
+            callback_calls: list[tuple[int, int, int]] = []
+
+            def callback(processed: int, total: int, chunk: dict) -> None:
+                callback_calls.append((processed, total, int(chunk["id"])))
+
+            with patch("src.vector_store.chromadb", self.fake_chromadb):
+                store = self._make_store()
+                added_count = store.add_chunks(
+                    chunks,
+                    db,
+                    progress_callback=callback,
+                )
+
+        self.assertEqual(added_count, 2)
+        self.assertEqual(callback_calls, [(1, 2, chunks[0]["id"]), (2, 2, chunks[1]["id"])])
+
     def test_count_returns_collection_count(self) -> None:
         """count should return collection item count."""
 

@@ -170,6 +170,53 @@ class TestMetadataDB(unittest.TestCase):
 
         self.assertEqual(chunk["vector_id"], "chunk-123")
 
+    def test_clear_chunk_vector_ids_clears_vector_ids_and_returns_count(self) -> None:
+        """clear_chunk_vector_ids should clear stale stored vector ids."""
+
+        first_entity_id, first_document_id = self._create_entity_and_document()
+        second_entity_id = self.db.upsert_entity("Grand Canyon", "place")
+        second_document_id = self.db.create_document(
+            second_entity_id,
+            "Grand Canyon",
+            None,
+            None,
+            None,
+            "success",
+        )
+        self.db.add_chunk(first_document_id, first_entity_id, 0, "first", "chunk-1")
+        self.db.add_chunk(first_document_id, first_entity_id, 1, "second", None)
+        self.db.add_chunk(second_document_id, second_entity_id, 0, "third", "chunk-3")
+
+        cleared_count = self.db.clear_chunk_vector_ids()
+        chunks = self.db.list_chunks()
+
+        self.assertEqual(cleared_count, 2)
+        self.assertTrue(all(chunk["vector_id"] is None for chunk in chunks))
+
+    def test_clear_chunk_vector_ids_can_filter_by_document_id(self) -> None:
+        """clear_chunk_vector_ids(document_id) should only clear one document."""
+
+        first_entity_id, first_document_id = self._create_entity_and_document()
+        second_entity_id = self.db.upsert_entity("Grand Canyon", "place")
+        second_document_id = self.db.create_document(
+            second_entity_id,
+            "Grand Canyon",
+            None,
+            None,
+            None,
+            "success",
+        )
+        self.db.add_chunk(first_document_id, first_entity_id, 0, "first", "chunk-1")
+        self.db.add_chunk(second_document_id, second_entity_id, 0, "second", "chunk-2")
+
+        cleared_count = self.db.clear_chunk_vector_ids(first_document_id)
+        first_chunks = self.db.list_chunks(document_id=first_document_id)
+        second_chunks = self.db.list_chunks(document_id=second_document_id)
+
+        self.assertEqual(cleared_count, 1)
+        self.assertIsNone(first_chunks[0]["vector_id"])
+        self.assertEqual(second_chunks[0]["vector_id"], "chunk-2")
+
     def test_list_chunks_filters_by_document_id_and_entity_id(self) -> None:
         """Chunk listing should support document and entity filters."""
 
