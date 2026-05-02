@@ -32,7 +32,7 @@ vector database, SQLite metadata, and a local Ollama LLM.
 - Split processed articles into retrieval chunks.
 - Generate embeddings locally with Ollama `nomic-embed-text`.
 - Store all vectors in one Chroma collection with metadata.
-- Route queries as `person`, `place`, `both`, or `unknown`.
+- Route queries as `person`, `place`, `both`, or `unknown`. 
 - Retrieve relevant chunks from Chroma.
 - Generate grounded answers with Ollama `llama3.2:3b`.
 - Return `I don't know.` when the answer is not available in retrieved context.
