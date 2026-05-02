@@ -19,6 +19,8 @@ from src.generator import GeneratedAnswer, OllamaAnswerGenerator
 from src.vector_store import ChromaVectorStore
 
 
+SessionStateMapping = MutableMapping[Any, Any]
+
 APP_TITLE = "Local Wikipedia RAG Assistant"
 APP_CAPTION = (
     "Ask questions about famous people and famous places using locally ingested "
@@ -33,7 +35,7 @@ CHAT_INPUT_KEY = "main_chat_input"
 RANDOM_PROMPT_BUTTON_KEY = "random_prompt_button"
 
 
-def initialize_session_state(session_state: MutableMapping[str, Any] | None = None) -> None:
+def initialize_session_state(session_state: SessionStateMapping | None = None) -> None:
     """Initialize Streamlit session state keys used by the chat UI."""
 
     state = session_state if session_state is not None else st.session_state
@@ -193,7 +195,7 @@ def build_random_prompt(
 
 
 def set_random_prompt_in_chat_input(
-    session_state: MutableMapping[str, Any] | None = None,
+    session_state: SessionStateMapping | None = None,
     prompt: str | None = None,
 ) -> str:
     """Set the main chat input text to a random starter prompt."""
@@ -361,7 +363,7 @@ def handle_user_query(
         return error_to_chat_message(exc)
 
 
-def is_generation_active(session_state: MutableMapping[str, Any] | None = None) -> bool:
+def is_generation_active(session_state: SessionStateMapping | None = None) -> bool:
     """Return whether a generation request is currently active."""
 
     state = _get_state(session_state)
@@ -370,7 +372,7 @@ def is_generation_active(session_state: MutableMapping[str, Any] | None = None) 
 
 def start_generation(
     prompt: str,
-    session_state: MutableMapping[str, Any] | None = None,
+    session_state: SessionStateMapping | None = None,
     executor: ThreadPoolExecutor | None = None,
     query_handler=handle_user_query,
 ) -> bool:
@@ -397,7 +399,7 @@ def start_generation(
     return True
 
 
-def stop_generation(session_state: MutableMapping[str, Any] | None = None) -> bool:
+def stop_generation(session_state: SessionStateMapping | None = None) -> bool:
     """Mark the active generation request as stopped and unblock the UI."""
 
     state = _get_state(session_state)
@@ -420,7 +422,7 @@ def stop_generation(session_state: MutableMapping[str, Any] | None = None) -> bo
 
 
 def finish_generation_if_ready(
-    session_state: MutableMapping[str, Any] | None = None,
+    session_state: SessionStateMapping | None = None,
 ) -> bool:
     """Append a completed background answer if the active request is still valid."""
 
@@ -1119,15 +1121,15 @@ def _friendly_runtime_message(exc: Exception) -> str:
 
 
 def _get_state(
-    session_state: MutableMapping[str, Any] | None = None,
-) -> MutableMapping[str, Any]:
+    session_state: SessionStateMapping | None = None,
+) -> SessionStateMapping:
     """Return explicit state or Streamlit session state."""
 
     return session_state if session_state is not None else st.session_state
 
 
 def _clear_generation_state(
-    session_state: MutableMapping[str, Any],
+    session_state: SessionStateMapping,
     stop_requested: bool,
 ) -> None:
     """Clear active generation fields while preserving chat history."""
