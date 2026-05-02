@@ -1091,7 +1091,7 @@ def render_random_prompt_button() -> None:
 def main() -> None:
     """Run the Streamlit app."""
 
-    st.set_page_config(page_title=APP_TITLE, page_icon="🤖", layout="wide")
+    st.set_page_config(page_title=APP_TITLE, page_icon=":material/smart_toy:", layout="wide")
     initialize_session_state()
     inject_custom_css()
     render_app_header()
