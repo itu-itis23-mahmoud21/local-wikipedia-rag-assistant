@@ -613,6 +613,40 @@ def inject_custom_css() -> None:
             opacity: 0.72;
             font-size: 0.85rem;
         }
+        [data-testid="stChatMessageAvatarUser"],
+        [data-testid="stChatMessageAvatarAssistant"] {
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            line-height: 1 !important;
+        }
+        [data-testid="stChatMessageAvatarUser"] {
+            background: rgba(208, 215, 222, 0.14) !important;
+            color: rgba(255, 255, 255, 0.88) !important;
+            box-shadow: 0 0 12px rgba(208, 215, 222, 0.18) !important;
+        }
+        [data-testid="stChatMessageAvatarAssistant"] {
+            background: rgba(255, 75, 75, 0.20) !important;
+            color: #ff8f84 !important;
+            box-shadow: 0 0 18px rgba(255, 75, 75, 0.22) !important;
+        }
+        [data-testid="stChatMessageAvatarUser"] svg,
+        [data-testid="stChatMessageAvatarAssistant"] svg,
+        [data-testid="stChatMessageAvatarUser"] span,
+        [data-testid="stChatMessageAvatarAssistant"] span {
+            margin: 0 !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            line-height: 1 !important;
+        }
+        section[data-testid="stSidebar"] div.stButton > button {
+            min-height: 3rem;
+            white-space: normal;
+            line-height: 1.2;
+            align-items: center;
+            justify-content: center;
+        }
         div.st-key-generation_status_bar {
             padding: 0;
             margin: 0.35rem 0 1rem;
@@ -851,7 +885,7 @@ def render_chat_export_panel() -> None:
 
     popover = getattr(st.sidebar, "popover", None)
     if popover is not None:
-        with popover("Export chat"):
+        with popover("Export chat", use_container_width=True):
             _render_chat_export_options()
     else:
         with st.sidebar.expander("Export chat"):
