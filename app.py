@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import MutableMapping
+from collections.abc import Callable, MutableMapping
 from concurrent.futures import ThreadPoolExecutor
 import html
 import json
@@ -65,8 +65,8 @@ def get_executor() -> ThreadPoolExecutor:
 
 
 def get_system_status(
-    db_factory=MetadataDB,
-    vector_store_factory=ChromaVectorStore,
+    db_factory: Callable[[], Any] = MetadataDB,
+    vector_store_factory: Callable[[], Any] = ChromaVectorStore,
 ) -> dict:
     """Collect local database and vector-store status for the sidebar."""
 
@@ -350,7 +350,7 @@ def build_stopped_message() -> dict:
 
 def handle_user_query(
     prompt: str,
-    generator: OllamaAnswerGenerator | None = None,
+    generator: Any | None = None,
     top_k: int | None = None,
 ) -> dict:
     """Run the local RAG answer flow and return an assistant chat message."""
@@ -373,8 +373,8 @@ def is_generation_active(session_state: SessionStateMapping | None = None) -> bo
 def start_generation(
     prompt: str,
     session_state: SessionStateMapping | None = None,
-    executor: ThreadPoolExecutor | None = None,
-    query_handler=handle_user_query,
+    executor: Any | None = None,
+    query_handler: Callable[[str], dict] = handle_user_query,
 ) -> bool:
     """Start a background generation request if no request is active."""
 
@@ -1091,7 +1091,7 @@ def render_random_prompt_button() -> None:
 def main() -> None:
     """Run the Streamlit app."""
 
-    st.set_page_config(page_title=APP_TITLE, page_icon=":mag:", layout="wide")
+    st.set_page_config(page_title=APP_TITLE, page_icon="🤖", layout="wide")
     initialize_session_state()
     inject_custom_css()
     render_app_header()

@@ -48,8 +48,7 @@ class TestMetadataDB(unittest.TestCase):
         )
 
         self.assertIsInstance(entity_id, int)
-        entity = self.db.get_entity("Albert Einstein", "person")
-        self.assertIsNotNone(entity)
+        entity = _require_row(self.db.get_entity("Albert Einstein", "person"))
         self.assertEqual(entity["id"], entity_id)
         self.assertEqual(entity["source"], "wikipedia")
 
@@ -77,9 +76,7 @@ class TestMetadataDB(unittest.TestCase):
 
         self.db.upsert_entity("Marie Curie", "person")
 
-        entity = self.db.get_entity("marie curie")
-
-        self.assertIsNotNone(entity)
+        entity = _require_row(self.db.get_entity("marie curie"))
         self.assertEqual(entity["name"], "Marie Curie")
 
     def test_get_entity_by_id_returns_entity(self) -> None:
@@ -87,9 +84,7 @@ class TestMetadataDB(unittest.TestCase):
 
         entity_id = self.db.upsert_entity("Marie Curie", "person")
 
-        entity = self.db.get_entity_by_id(entity_id)
-
-        self.assertIsNotNone(entity)
+        entity = _require_row(self.db.get_entity_by_id(entity_id))
         self.assertEqual(entity["id"], entity_id)
         self.assertEqual(entity["name"], "Marie Curie")
 
@@ -118,9 +113,7 @@ class TestMetadataDB(unittest.TestCase):
             status="success",
         )
 
-        document = self.db.get_document(document_id)
-
-        self.assertIsNotNone(document)
+        document = _require_row(self.db.get_document(document_id))
         self.assertEqual(document["entity_id"], entity_id)
         self.assertEqual(document["title"], "Nikola Tesla")
         self.assertEqual(document["status"], "success")
@@ -139,7 +132,7 @@ class TestMetadataDB(unittest.TestCase):
         )
 
         self.db.update_document_status(document_id, "failed", "Network timeout")
-        document = self.db.get_document(document_id)
+        document = _require_row(self.db.get_document(document_id))
 
         self.assertEqual(document["status"], "failed")
         self.assertEqual(document["error_message"], "Network timeout")
@@ -216,6 +209,16 @@ class TestMetadataDB(unittest.TestCase):
         self.assertEqual(cleared_count, 1)
         self.assertIsNone(first_chunks[0]["vector_id"])
         self.assertEqual(second_chunks[0]["vector_id"], "chunk-2")
+
+    def test_count_chunk_vector_ids_counts_only_populated_ids(self) -> None:
+        """count_chunk_vector_ids should count chunks with stored vector ids."""
+
+        entity_id, document_id = self._create_entity_and_document()
+        self.db.add_chunk(document_id, entity_id, 0, "first", "chunk-1")
+        self.db.add_chunk(document_id, entity_id, 1, "second", None)
+        self.db.add_chunk(document_id, entity_id, 2, "third", "chunk-3")
+
+        self.assertEqual(self.db.count_chunk_vector_ids(), 2)
 
     def test_list_chunks_filters_by_document_id_and_entity_id(self) -> None:
         """Chunk listing should support document and entity filters."""
@@ -300,9 +303,7 @@ class TestMetadataDB(unittest.TestCase):
             notes="Finished with two failures",
         )
 
-        run = self.db.get_ingestion_run(run_id)
-
-        self.assertIsNotNone(run)
+        run = _require_row(self.db.get_ingestion_run(run_id))
         self.assertEqual(run["status"], "success")
         self.assertEqual(run["total_entities"], 100)
         self.assertEqual(run["successful_entities"], 98)
@@ -387,3 +388,10 @@ class TestMetadataDB(unittest.TestCase):
             "success",
         )
         return entity_id, document_id
+
+
+def _require_row(row: dict | None) -> dict:
+    """Return a non-null row dict for tests and static type checkers."""
+
+    assert row is not None
+    return row

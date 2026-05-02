@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import time
@@ -52,6 +53,58 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Print vector build progress every N chunks. Use <= 0 to disable.",
     )
     parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=50,
+        help="Number of vectors to upsert to Chroma per batch.",
+    )
+    parser.add_argument(
+        "--shard-count",
+        type=int,
+        default=config.DEFAULT_CHROMA_SHARD_COUNT,
+        help="Number of Chroma shard collections to use.",
+    )
+    parser.add_argument(
+        "--reset-chroma-dir",
+        action="store_true",
+        help="Delete the whole Chroma persistent directory before building.",
+    )
+    parser.add_argument(
+        "--post-build-health-check",
+        dest="post_build_health_check",
+        action="store_true",
+        default=True,
+        help="Reopen Chroma in a fresh Python process and verify querying works.",
+    )
+    parser.add_argument(
+        "--skip-post-build-health-check",
+        dest="post_build_health_check",
+        action="store_false",
+        help="Skip the fresh-process Chroma health check.",
+    )
+    parser.add_argument(
+        "--health-check-query",
+        default="Who is Albert Einstein?",
+        help="Query used by the post-build Chroma health check.",
+    )
+    parser.add_argument(
+        "--health-check-entity",
+        default="",
+        help="Optional exact entity filter used by the post-build health check.",
+    )
+    parser.add_argument(
+        "--health-check-entity-type",
+        choices=["all", "person", "place"],
+        default="all",
+        help="Optional entity type filter used by the post-build health check.",
+    )
+    parser.add_argument(
+        "--post-build-settle-seconds",
+        type=float,
+        default=10.0,
+        help="Seconds to wait after upserts before fresh-process health checking.",
+    )
+    parser.add_argument(
         "--gpu-check",
         dest="gpu_check",
         action="store_true",
@@ -73,6 +126,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.limit is not None and args.limit < 0:
         parser.error("--limit must be non-negative.")
+    if args.batch_size <= 0:
+        parser.error("--batch-size must be positive.")
+    if args.shard_count <= 0:
+        parser.error("--shard-count must be positive.")
+    if args.post_build_settle_seconds < 0:
+        parser.error("--post-build-settle-seconds must be non-negative.")
     if args.require_gpu and not args.gpu_check:
         parser.error("--require-gpu cannot be used with --skip-gpu-check.")
     return args
@@ -91,14 +150,19 @@ def main(argv: list[str] | None = None) -> int:
     db = MetadataDB()
     db.init_schema()
 
-    vector_store = ChromaVectorStore()
+    if args.reset_chroma_dir:
+        reset_chroma_directory(config.CHROMA_DB_DIR)
+
+    vector_store = ChromaVectorStore(shard_count=args.shard_count)
     if args.reset_collection:
         vector_store.reset_collection()
+
+    if args.reset_collection or args.reset_chroma_dir:
         cleared_count = db.clear_chunk_vector_ids()
         print(
             "Cleared "
-            f"{cleared_count} stale vector IDs from SQLite because the Chroma "
-            "collection was reset."
+            f"{cleared_count} stale vector IDs from SQLite because Chroma "
+            "storage was reset."
         )
 
     all_chunks = db.list_chunks()
@@ -110,6 +174,10 @@ def main(argv: list[str] | None = None) -> int:
         selected_count=len(selected_chunks),
         progress_every=args.progress_every,
         db_path=db.db_path,
+        batch_size=args.batch_size,
+        shard_count=args.shard_count,
+        post_build_health_check=args.post_build_health_check,
+        reset_chroma_dir=args.reset_chroma_dir,
     )
 
     progress_callback = make_progress_callback(
@@ -120,16 +188,56 @@ def main(argv: list[str] | None = None) -> int:
         selected_chunks,
         db,
         progress_callback=progress_callback,
+        batch_size=args.batch_size,
     )
+
+    collection_count = vector_store.count()
+    shard_counts = vector_store.get_shard_counts()
+    if args.post_build_settle_seconds > 0:
+        print(
+            "Waiting "
+            f"{args.post_build_settle_seconds:.1f}s for Chroma persistence "
+            "to settle before verification..."
+        )
+        time.sleep(args.post_build_settle_seconds)
+        collection_count = vector_store.count()
+        shard_counts = vector_store.get_shard_counts()
+
+    sqlite_vector_id_count = db.count_chunk_vector_ids()
 
     print("Vector store build summary")
     print(f"Chunks available: {len(all_chunks)}")
     print(f"Chunks selected: {len(selected_chunks)}")
     print(f"Chunks added: {chunks_added}")
-    print(f"Collection count: {vector_store.count()}")
+    print(f"Collection count: {collection_count}")
+    print("Per-shard counts:")
+    for shard_name, shard_count in shard_counts.items():
+        print(f"- {shard_name}: {shard_count}")
+    print(f"SQLite vector_id count: {sqlite_vector_id_count}")
     print(f"Chroma path: {config.CHROMA_DB_DIR}")
     print(f"Collection name: {config.CHROMA_COLLECTION_NAME}")
     print(f"Database path: {db.db_path}")
+
+    if args.post_build_health_check:
+        health_ok = run_post_build_health_check(
+            query=args.health_check_query,
+            entity=args.health_check_entity,
+            entity_type=args.health_check_entity_type,
+            shard_count=args.shard_count,
+        )
+        print(
+            "Post-build health check result: "
+            f"{'passed' if health_ok else 'failed'}"
+        )
+        if not health_ok:
+            print(
+                "Vector build completed, but reopened Chroma query health check "
+                "failed. The persisted HNSW index is not queryable."
+            )
+            return 3
+    else:
+        print("Post-build health check result: skipped")
+
     return 0
 
 
@@ -137,6 +245,10 @@ def print_vector_build_start(
     selected_count: int,
     progress_every: int,
     db_path: Path,
+    batch_size: int,
+    shard_count: int,
+    post_build_health_check: bool,
+    reset_chroma_dir: bool,
 ) -> None:
     """Print a clear start message before embedding begins."""
 
@@ -146,11 +258,19 @@ def print_vector_build_start(
         else "disabled"
     )
     print("Vector store build starting")
+    print(f"chromadb version: {get_chromadb_version()}")
     print(f"Chunks selected: {selected_count}")
     print(f"Collection: {config.CHROMA_COLLECTION_NAME}")
     print(f"Chroma path: {config.CHROMA_DB_DIR}")
     print(f"Database path: {db_path}")
+    print(f"Batch size: {batch_size}")
+    print(f"Shard count: {shard_count}")
     print(f"Progress interval: {interval}")
+    print(
+        "Post-build health check: "
+        f"{'enabled' if post_build_health_check else 'disabled'}"
+    )
+    print(f"Reset Chroma directory: {'yes' if reset_chroma_dir else 'no'}")
 
 
 def make_progress_callback(
@@ -216,6 +336,112 @@ def format_progress_line(
     )
 
 
+def reset_chroma_directory(chroma_dir: Path) -> bool:
+    """Delete the Chroma persistent directory if it exists."""
+
+    if not chroma_dir.exists():
+        print(f"Chroma directory already absent: {chroma_dir}")
+        return False
+    if not chroma_dir.is_dir():
+        raise RuntimeError(f"Chroma path is not a directory: {chroma_dir}")
+
+    shutil.rmtree(chroma_dir)
+    print(f"Removed Chroma directory: {chroma_dir}")
+    return True
+
+
+def get_chromadb_version() -> str:
+    """Return the installed chromadb version if available."""
+
+    try:
+        import chromadb
+    except ImportError:
+        return "not installed"
+    return str(getattr(chromadb, "__version__", "unknown"))
+
+
+def run_post_build_health_check(
+    query: str,
+    entity: str | None = None,
+    entity_type: str = "all",
+    shard_count: int = config.DEFAULT_CHROMA_SHARD_COUNT,
+    timeout_seconds: int = 120,
+    command_runner: CommandRunner | None = None,
+) -> bool:
+    """Run a fresh-process Chroma query health check."""
+
+    runner = command_runner or run_command_capture
+    command = build_health_check_command(query, entity, entity_type, shard_count)
+
+    print("Running post-build Chroma health check in a fresh Python process...")
+    ok, output = runner(command, timeout_seconds)
+    if output:
+        print(output)
+    return ok
+
+
+def build_health_check_command(
+    query: str,
+    entity: str | None,
+    entity_type: str,
+    shard_count: int = config.DEFAULT_CHROMA_SHARD_COUNT,
+) -> list[str]:
+    """Build the subprocess command for the Chroma health check."""
+
+    health_check_code = """
+import argparse
+
+from src.vector_store import ChromaVectorStore
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--query", required=True)
+    parser.add_argument("--entity", default="")
+    parser.add_argument("--entity-type", default="all")
+    parser.add_argument("--shard-count", type=int, default=10)
+    args = parser.parse_args()
+
+    store = ChromaVectorStore(shard_count=args.shard_count)
+    print(f"Reopened Chroma count: {store.count()}")
+    for shard_name, shard_count in store.get_shard_counts().items():
+        print(f"{shard_name}: {shard_count}")
+
+    sample_results = store.get_sample_results(limit=1)
+    print(f"Fresh-process sample get returned {len(sample_results)} item(s).")
+
+    entity_names = [args.entity] if args.entity.strip() else None
+    entity_type_filter = None if args.entity_type == "all" else args.entity_type
+    results = store.search(
+        args.query,
+        top_k=3,
+        entity_type=entity_type_filter,
+        entity_names=entity_names,
+    )
+    print(f"Fresh-process search returned {len(results)} result(s).")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+""".strip()
+
+    command = [
+        sys.executable,
+        "-c",
+        health_check_code,
+        "--query",
+        query,
+        "--entity-type",
+        entity_type,
+        "--shard-count",
+        str(shard_count),
+    ]
+    if entity is not None and entity.strip():
+        command.extend(["--entity", entity.strip()])
+    return command
+
+
 def run_gpu_preflight(
     require_gpu: bool = False,
     command_runner: CommandRunner | None = None,
@@ -276,6 +502,7 @@ def run_command_capture(command: list[str], timeout_seconds: int) -> tuple[bool,
             text=True,
             timeout=timeout_seconds,
             check=False,
+            cwd=PROJECT_ROOT,
         )
     except (FileNotFoundError, subprocess.SubprocessError, OSError) as exc:
         return False, str(exc)

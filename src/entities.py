@@ -1,8 +1,8 @@
 """Entity configuration for famous people and famous places.
 
-The assistant will ingest Wikipedia pages for these configured entities in a
-later step. This module intentionally contains only static entity metadata and
-small helper functions.
+The assistant ingests Wikipedia pages for these configured entities. This
+module intentionally contains only static entity metadata and small helper
+functions.
 """
 
 from dataclasses import dataclass
@@ -30,43 +30,18 @@ PEOPLE: list[str] = [
     "Mohamed Salah",
     "Isaac Newton",
     "Charles Darwin",
-    "Galileo Galilei",
-    "Stephen Hawking",
     "Alan Turing",
     "Grace Hopper",
-    "Steve Jobs",
-    "Bill Gates",
-    "Elon Musk",
     "Aristotle",
-    "Plato",
-    "Socrates",
     "Mahatma Gandhi",
     "Nelson Mandela",
     "Martin Luther King Jr.",
     "Abraham Lincoln",
-    "Winston Churchill",
     "Cleopatra",
-    "Alexander the Great",
-    "Napoleon",
-    "Julius Caesar",
     "Queen Elizabeth II",
-    "Vincent van Gogh",
     "Pablo Picasso",
-    "Michelangelo",
-    "Ludwig van Beethoven",
     "Wolfgang Amadeus Mozart",
-    "Michael Jackson",
-    "Elvis Presley",
-    "Beyoncé",
-    "Bob Marley",
-    "J. K. Rowling",
-    "Agatha Christie",
     "Jane Austen",
-    "Mark Twain",
-    "Walt Disney",
-    "Serena Williams",
-    "Usain Bolt",
-    "Michael Jordan",
 ]
 
 PLACES: list[str] = [
@@ -82,7 +57,6 @@ PLACES: list[str] = [
     "Mount Everest",
     "Burj Khalifa",
     "Big Ben",
-    "Tower Bridge",
     "Sydney Opera House",
     "Sagrada Família",
     "Stonehenge",
@@ -91,35 +65,11 @@ PLACES: list[str] = [
     "Acropolis of Athens",
     "Louvre",
     "Vatican City",
-    "Notre-Dame de Paris",
-    "Palace of Versailles",
-    "Buckingham Palace",
-    "Kremlin",
-    "Leaning Tower of Pisa",
-    "Christ the Redeemer",
-    "Golden Gate Bridge",
     "Mount Fuji",
     "Niagara Falls",
-    "Amazon Rainforest",
-    "Sahara",
-    "Nile",
-    "Amazon River",
-    "Dead Sea",
-    "Lake Baikal",
-    "Mount Kilimanjaro",
-    "Santorini",
-    "Maldives",
-    "Bali",
-    "Central Park",
-    "Times Square",
-    "Hollywood Sign",
-    "Disneyland",
-    "Las Vegas Strip",
     "Alhambra",
     "Blue Mosque",
     "Topkapı Palace",
-    "Cappadocia",
-    "Mount Rushmore",
 ]
 
 ENTITY_TYPES = ("person", "place")
@@ -173,10 +123,10 @@ def is_known_entity(name: str) -> bool:
 def validate_entities() -> None:
     """Validate entity counts, names, and uniqueness."""
 
-    if len(PEOPLE) != 50:
-        raise ValueError(f"Expected 50 people, found {len(PEOPLE)}.")
-    if len(PLACES) != 50:
-        raise ValueError(f"Expected 50 places, found {len(PLACES)}.")
+    if len(PEOPLE) != 25:
+        raise ValueError(f"Expected 25 people, found {len(PEOPLE)}.")
+    if len(PLACES) != 25:
+        raise ValueError(f"Expected 25 places, found {len(PLACES)}.")
 
     all_names = PEOPLE + PLACES
     blank_names = [name for name in all_names if not name.strip()]

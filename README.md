@@ -18,7 +18,7 @@ to build a simplified local ChatGPT-style RAG system without external LLM APIs.
 
 ## Features
 
-- 50 configured famous people and 50 configured famous places
+- 25 configured famous people and 25 configured famous places
 - Wikipedia ingestion through the MediaWiki API
 - Local SQLite metadata database
 - Deterministic document chunking

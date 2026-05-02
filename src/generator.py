@@ -7,6 +7,7 @@ language model. It does not call external LLM APIs.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from src import config
 from src.retriever import RAGRetriever
@@ -97,7 +98,7 @@ class OllamaAnswerGenerator:
     def answer_query(
         self,
         query: str,
-        retriever: RAGRetriever | None = None,
+        retriever: Any | None = None,
         top_k: int | None = None,
     ) -> GeneratedAnswer:
         """Retrieve context for a query and generate a grounded answer."""

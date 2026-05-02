@@ -3,11 +3,18 @@
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
+from typing import cast
 import unittest
 from unittest.mock import patch
 
 from src.database import MetadataDB
-from src.vector_store import ChromaVectorStore, VectorSearchResult, VectorStoreError
+from src.vector_store import (
+    ChromaVectorStore,
+    VectorSearchResult,
+    VectorStoreError,
+    _get_shard_collection_name,
+    _get_shard_index,
+)
 
 
 class FakeEmbeddingClient:
@@ -31,6 +38,7 @@ class FakeCollection:
         self.name = name
         self.items: dict[str, dict] = {}
         self.last_where: dict | None = None
+        self.upsert_batch_sizes: list[int] = []
 
     def upsert(
         self,
@@ -41,6 +49,7 @@ class FakeCollection:
     ) -> None:
         """Store items by id."""
 
+        self.upsert_batch_sizes.append(len(ids))
         for index, item_id in enumerate(ids):
             self.items[item_id] = {
                 "embedding": embeddings[index],
@@ -77,6 +86,7 @@ class FakeCollection:
         self,
         where: dict | None = None,
         include: list[str] | None = None,
+        limit: int | None = None,
     ) -> dict:
         """Return stored items in insertion order, optionally metadata-filtered."""
 
@@ -89,6 +99,8 @@ class FakeCollection:
                 for item in items
                 if self._matches_where(item[1]["metadata"], where)
             ]
+        if limit is not None:
+            items = items[:limit]
 
         return {
             "ids": [item_id for item_id, _ in items],
@@ -136,6 +148,11 @@ class FakePersistentClient:
 
         self.collections.pop(name, None)
 
+    def list_collections(self) -> list[FakeCollection]:
+        """Return fake collections for reset tests."""
+
+        return list(self.collections.values())
+
 
 class TestChromaVectorStore(unittest.TestCase):
     """Tests for ChromaVectorStore using fake Chroma and fake embeddings."""
@@ -168,6 +185,23 @@ class TestChromaVectorStore(unittest.TestCase):
         self.assertEqual(metadata["source_url"], "https://example.test/wiki")
         self.assertEqual(metadata["chunk_index"], 0)
         self.assertEqual(metadata["model"], "test-model")
+
+    def test_shard_index_is_deterministic(self) -> None:
+        """Shard selection should be stable across calls."""
+
+        first_index = _get_shard_index(123, 10)
+        second_index = _get_shard_index(123, 10)
+
+        self.assertEqual(first_index, second_index)
+        self.assertGreaterEqual(first_index, 0)
+        self.assertLess(first_index, 10)
+
+    def test_shard_collection_names_are_stable(self) -> None:
+        """Shard collection names should use the configured base name."""
+
+        name = _get_shard_collection_name("wikipedia_entities", 3)
+
+        self.assertEqual(name, "wikipedia_entities_shard_03")
 
     def test_add_chunk_stores_one_item_and_count_becomes_one(self) -> None:
         """add_chunk should upsert one Chroma item."""
@@ -238,7 +272,7 @@ class TestChromaVectorStore(unittest.TestCase):
             )
             results = store.search("tower", top_k=5, entity_type="place")
 
-        self.assertEqual(store.collection.last_where, {"entity_type": "place"})
+        self.assertIn({"entity_type": "place"}, self._all_last_where_values(store))
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].metadata["entity_type"], "place")
 
@@ -266,7 +300,7 @@ class TestChromaVectorStore(unittest.TestCase):
                 entity_names=["Albert Einstein"],
             )
 
-        self.assertEqual(store.collection.last_where, {"entity": "Albert Einstein"})
+        self.assertIn({"entity": "Albert Einstein"}, self._all_last_where_values(store))
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].metadata["entity"], "Albert Einstein")
 
@@ -300,9 +334,9 @@ class TestChromaVectorStore(unittest.TestCase):
                 entity_names=["Albert Einstein", "Nikola Tesla"],
             )
 
-        self.assertEqual(
-            store.collection.last_where,
+        self.assertIn(
             {"entity": {"$in": ["Albert Einstein", "Nikola Tesla"]}},
+            self._all_last_where_values(store),
         )
         self.assertEqual([result.metadata["entity"] for result in results], [
             "Albert Einstein",
@@ -334,9 +368,9 @@ class TestChromaVectorStore(unittest.TestCase):
                 entity_names=["Albert Einstein"],
             )
 
-        self.assertEqual(
-            store.collection.last_where,
+        self.assertIn(
             {"$and": [{"entity_type": "person"}, {"entity": "Albert Einstein"}]},
+            self._all_last_where_values(store),
         )
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].metadata["entity"], "Albert Einstein")
@@ -360,7 +394,7 @@ class TestChromaVectorStore(unittest.TestCase):
                 entity_names=[" ", ""],
             )
 
-        self.assertEqual(store.collection.last_where, {"entity_type": "person"})
+        self.assertIn({"entity_type": "person"}, self._all_last_where_values(store))
         self.assertEqual(len(results), 1)
 
     def test_get_intro_chunks_returns_first_chunk_for_one_entity(self) -> None:
@@ -441,7 +475,7 @@ class TestChromaVectorStore(unittest.TestCase):
             )
 
         self.assertEqual(
-            store.collection.last_where,
+            self._fake_collection(store, 0).last_where,
             {"$and": [{"entity_type": "place"}, {"entity": "Eiffel Tower"}]},
         )
         self.assertEqual(len(results), 1)
@@ -553,8 +587,77 @@ class TestChromaVectorStore(unittest.TestCase):
         self.assertEqual(added_count, 2)
         self.assertEqual(callback_calls, [(1, 2, chunks[0]["id"]), (2, 2, chunks[1]["id"])])
 
+    def test_add_chunks_uses_batch_upserts(self) -> None:
+        """add_chunks should group Chroma upserts by batch_size."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db = MetadataDB(Path(temp_dir) / "metadata.sqlite")
+            db.init_schema()
+            entity_id = db.upsert_entity("Albert Einstein", "person")
+            document_id = db.create_document(
+                entity_id,
+                "Albert Einstein",
+                "https://example.test/wiki",
+                None,
+                None,
+                "success",
+            )
+            db.add_chunk(document_id, entity_id, 0, "first chunk")
+            db.add_chunk(document_id, entity_id, 1, "second chunk")
+            db.add_chunk(document_id, entity_id, 2, "third chunk")
+            chunks = db.list_chunks()
+
+            with patch("src.vector_store.chromadb", self.fake_chromadb):
+                store = self._make_store()
+                added_count = store.add_chunks(chunks, db, batch_size=2)
+
+        self.assertEqual(added_count, 3)
+        self.assertEqual(self._all_upsert_batch_sizes(store), [2, 1])
+
+    def test_add_chunks_routes_chunks_to_expected_shard_collections(self) -> None:
+        """add_chunks should route each entity to its deterministic shard."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db = MetadataDB(Path(temp_dir) / "metadata.sqlite")
+            db.init_schema()
+            first_entity_id = db.upsert_entity("Albert Einstein", "person")
+            second_entity_id = db.upsert_entity("Marie Curie", "person")
+            first_document_id = db.create_document(
+                first_entity_id,
+                "Albert Einstein",
+                "https://example.test/einstein",
+                None,
+                None,
+                "success",
+            )
+            second_document_id = db.create_document(
+                second_entity_id,
+                "Marie Curie",
+                "https://example.test/curie",
+                None,
+                None,
+                "success",
+            )
+            first_chunk_id = db.add_chunk(first_document_id, first_entity_id, 0, "einstein")
+            second_chunk_id = db.add_chunk(second_document_id, second_entity_id, 0, "curie")
+
+            with patch("src.vector_store.chromadb", self.fake_chromadb):
+                store = self._make_store(shard_count=3)
+                store.add_chunks(db.list_chunks(), db, batch_size=10)
+
+        first_shard = _get_shard_index(first_entity_id, 3)
+        second_shard = _get_shard_index(second_entity_id, 3)
+        self.assertIn(
+            f"chunk-{first_chunk_id}",
+            self._fake_collection(store, first_shard).items,
+        )
+        self.assertIn(
+            f"chunk-{second_chunk_id}",
+            self._fake_collection(store, second_shard).items,
+        )
+
     def test_count_returns_collection_count(self) -> None:
-        """count should return collection item count."""
+        """count should return total item count across shards."""
 
         with patch("src.vector_store.chromadb", self.fake_chromadb):
             store = self._make_store()
@@ -567,6 +670,29 @@ class TestChromaVectorStore(unittest.TestCase):
             )
 
         self.assertEqual(store.count(), 1)
+
+    def test_count_sums_counts_across_shards(self) -> None:
+        """count should add all shard collection counts."""
+
+        with patch("src.vector_store.chromadb", self.fake_chromadb):
+            store = self._make_store(shard_count=3)
+            first_entity = self._entity(id=1, name="Albert Einstein")
+            second_entity = self._entity(id=2, name="Marie Curie")
+            store.add_chunk(
+                self._chunk(id=1, entity_id=1, text="Einstein text"),
+                self._document(entity_id=1),
+                first_entity,
+                embedding=[0.1, 0.2],
+            )
+            store.add_chunk(
+                self._chunk(id=2, entity_id=2, text="Curie text"),
+                self._document(entity_id=2),
+                second_entity,
+                embedding=[0.3, 0.4],
+            )
+
+        self.assertEqual(store.count(), 2)
+        self.assertEqual(sum(store.get_shard_counts().values()), 2)
 
     def test_add_chunks_raises_for_missing_document_metadata(self) -> None:
         """add_chunks should fail clearly when SQLite metadata is missing."""
@@ -587,9 +713,60 @@ class TestChromaVectorStore(unittest.TestCase):
                 with self.assertRaises(VectorStoreError):
                     store.add_chunks([chunk], db)
 
+    def test_search_merges_results_from_multiple_shards_by_distance(self) -> None:
+        """search should merge shard results and return global top_k by distance."""
+
+        with patch("src.vector_store.chromadb", self.fake_chromadb):
+            store = self._make_store(shard_count=3)
+            store.add_chunk(
+                self._chunk(id=1, entity_id=1, text="Alpha"),
+                self._document(entity_id=1),
+                self._entity(id=1, name="Albert Einstein"),
+                embedding=[0.1, 0.2],
+            )
+            store.add_chunk(
+                self._chunk(id=2, entity_id=2, text="Beta"),
+                self._document(entity_id=2),
+                self._entity(id=2, name="Marie Curie"),
+                embedding=[0.3, 0.4],
+            )
+
+            for collection in self._fake_collections(store):
+                collection.query = self._query_with_distance_by_id(collection)
+
+            results = store.search("science", top_k=1)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].vector_id, "chunk-2")
+
+    def test_get_intro_chunks_can_retrieve_across_shards(self) -> None:
+        """get_intro_chunks should merge intro candidates from all shards."""
+
+        with patch("src.vector_store.chromadb", self.fake_chromadb):
+            store = self._make_store(shard_count=3)
+            store.add_chunk(
+                self._chunk(id=1, entity_id=1, text="Einstein intro", chunk_index=0),
+                self._document(entity_id=1),
+                self._entity(id=1, name="Albert Einstein"),
+                embedding=[0.1, 0.2],
+            )
+            store.add_chunk(
+                self._chunk(id=2, entity_id=2, text="Curie intro", chunk_index=0),
+                self._document(entity_id=2),
+                self._entity(id=2, name="Marie Curie"),
+                embedding=[0.3, 0.4],
+            )
+            results = store.get_intro_chunks(["Albert Einstein", "Marie Curie"])
+
+        self.assertEqual(
+            [result.metadata["entity"] for result in results],
+            ["Albert Einstein", "Marie Curie"],
+        )
+
     def _make_store(
         self,
         embedding_client: FakeEmbeddingClient | None = None,
+        shard_count: int = 10,
     ) -> ChromaVectorStore:
         """Create a vector store with fake Chroma and fake embeddings."""
 
@@ -597,11 +774,13 @@ class TestChromaVectorStore(unittest.TestCase):
             persist_directory=Path(self.temp_dir.name) / "chroma",
             collection_name="test_collection",
             embedding_client=embedding_client or FakeEmbeddingClient(),
+            shard_count=shard_count,
         )
 
     def _chunk(
         self,
         id: int = 1,
+        entity_id: int = 3,
         text: str = "Albert Einstein was a physicist.",
         chunk_index: int = 0,
     ) -> dict:
@@ -610,31 +789,91 @@ class TestChromaVectorStore(unittest.TestCase):
         return {
             "id": id,
             "document_id": 2,
-            "entity_id": 3,
+            "entity_id": entity_id,
             "chunk_index": chunk_index,
             "text": text,
         }
 
-    def _document(self) -> dict:
+    def _document(self, entity_id: int = 3) -> dict:
         """Return representative document metadata."""
 
         return {
             "id": 2,
-            "entity_id": 3,
+            "entity_id": entity_id,
             "title": "Albert Einstein",
             "source_url": "https://example.test/wiki",
         }
 
     def _entity(
         self,
+        id: int = 3,
         name: str = "Albert Einstein",
         entity_type: str = "person",
     ) -> dict:
         """Return representative entity metadata."""
 
         return {
-            "id": 3,
+            "id": id,
             "name": name,
             "entity_type": entity_type,
             "source_url": "https://example.test/entity",
         }
+
+    def _all_upsert_batch_sizes(self, store: ChromaVectorStore) -> list[int]:
+        """Return non-empty fake upsert batch sizes from all shards."""
+
+        batch_sizes: list[int] = []
+        for collection in self._fake_collections(store):
+            batch_sizes.extend(collection.upsert_batch_sizes)
+        return batch_sizes
+
+    def _all_last_where_values(self, store: ChromaVectorStore) -> list[dict | None]:
+        """Return last where filters from all fake shard collections."""
+
+        return [collection.last_where for collection in self._fake_collections(store)]
+
+    def _fake_collection(
+        self,
+        store: ChromaVectorStore,
+        shard_index: int,
+    ) -> FakeCollection:
+        """Return a shard collection as the fake test double type."""
+
+        return cast(FakeCollection, store.collections[shard_index])
+
+    def _fake_collections(self, store: ChromaVectorStore) -> list[FakeCollection]:
+        """Return all shard collections as fake test double instances."""
+
+        return [cast(FakeCollection, collection) for collection in store.collections.values()]
+
+    def _query_with_distance_by_id(self, collection: FakeCollection):
+        """Return a query function with deterministic distance based on vector id."""
+
+        def query(
+            query_embeddings: list[list[float]],
+            n_results: int,
+            where: dict | None = None,
+        ) -> dict:
+            del query_embeddings
+            collection.last_where = where
+            items = list(collection.items.items())
+            if where:
+                items = [
+                    item
+                    for item in items
+                    if collection._matches_where(item[1]["metadata"], where)
+                ]
+            distances = {
+                "chunk-1": 0.8,
+                "chunk-2": 0.1,
+            }
+            items.sort(key=lambda item: distances.get(item[0], 0.5))
+            items = items[:n_results]
+            return {
+                "ids": [[item_id for item_id, _ in items]],
+                "documents": [[item["document"] for _, item in items]],
+                "metadatas": [[item["metadata"] for _, item in items]],
+                "distances": [[distances.get(item_id, 0.5) for item_id, _ in items]],
+            }
+
+        return query

@@ -1,7 +1,7 @@
 """Persistent Chroma vector store for Wikipedia chunk embeddings.
 
-This module stores one vector item per SQLite chunk in a single Chroma
-collection. Embeddings are generated through the local Ollama embedding client;
+This module stores one vector item per SQLite chunk across deterministic Chroma
+shards. Embeddings are generated through the local Ollama embedding client;
 Chroma's built-in embedding functions are intentionally not used.
 """
 
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -44,13 +45,17 @@ class ChromaVectorStore:
         self,
         persist_directory: str | Path = config.CHROMA_DB_DIR,
         collection_name: str = config.CHROMA_COLLECTION_NAME,
-        embedding_client: OllamaEmbeddingClient | None = None,
+        embedding_client: Any | None = None,
+        shard_count: int = config.DEFAULT_CHROMA_SHARD_COUNT,
     ) -> None:
-        """Create or open the configured Chroma collection."""
+        """Create or open the configured sharded Chroma collections."""
 
+        if shard_count <= 0:
+            raise ValueError("shard_count must be positive.")
         self.persist_directory = Path(persist_directory)
         self.persist_directory.mkdir(parents=True, exist_ok=True)
         self.collection_name = collection_name
+        self.shard_count = shard_count
         self.embedding_client = embedding_client or OllamaEmbeddingClient()
 
         if chromadb is None:
@@ -61,25 +66,54 @@ class ChromaVectorStore:
 
         try:
             self.client = chromadb.PersistentClient(path=str(self.persist_directory))
-            self.collection = self.client.get_or_create_collection(
-                name=self.collection_name
-            )
+            self.collections = {
+                shard_index: self.client.get_or_create_collection(
+                    name=_get_shard_collection_name(
+                        self.collection_name,
+                        shard_index,
+                    )
+                )
+                for shard_index in range(self.shard_count)
+            }
+            self.collection = self.collections[0]
         except Exception as exc:
             raise VectorStoreError(f"Failed to initialize Chroma: {exc}") from exc
 
     def reset_collection(self) -> None:
-        """Delete and recreate the configured Chroma collection."""
+        """Delete and recreate all configured Chroma shard collections."""
 
         try:
-            try:
-                self.client.delete_collection(name=self.collection_name)
-            except Exception:
-                pass
-            self.collection = self.client.get_or_create_collection(
-                name=self.collection_name
+            collection_names = {self.collection_name}
+            collection_names.update(
+                _get_shard_collection_name(self.collection_name, shard_index)
+                for shard_index in range(self.shard_count)
             )
+            collection_names.update(
+                name
+                for name in _list_existing_collection_names(self.client)
+                if _is_shard_collection_name(name, self.collection_name)
+            )
+
+            for collection_name in collection_names:
+                try:
+                    self.client.delete_collection(name=collection_name)
+                except Exception:
+                    pass
+
+            self.collections = {
+                shard_index: self.client.get_or_create_collection(
+                    name=_get_shard_collection_name(
+                        self.collection_name,
+                        shard_index,
+                    )
+                )
+                for shard_index in range(self.shard_count)
+            }
+            self.collection = self.collections[0]
         except Exception as exc:
-            raise VectorStoreError(f"Failed to reset Chroma collection: {exc}") from exc
+            raise VectorStoreError(
+                f"Failed to reset Chroma shard collections: {exc}"
+            ) from exc
 
     def build_metadata(
         self,
@@ -126,7 +160,10 @@ class ChromaVectorStore:
                 entity,
                 model=self.embedding_client.model,
             )
-            self.collection.upsert(
+            collection = self._get_entity_shard_collection(
+                int(metadata["entity_id"])
+            )
+            collection.upsert(
                 ids=[vector_id],
                 embeddings=[vector],
                 documents=[text],
@@ -147,20 +184,49 @@ class ChromaVectorStore:
         db: MetadataDB,
         limit: int | None = None,
         progress_callback: Callable[[int, int, dict], None] | None = None,
+        batch_size: int = 50,
     ) -> int:
         """Add SQLite chunk rows to Chroma and update their vector ids."""
 
         if limit is not None and limit < 0:
             raise ValueError("limit must be non-negative.")
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive.")
 
         selected_chunks = chunks[:limit] if limit is not None else chunks
         added_count = 0
         total_count = len(selected_chunks)
 
-        for chunk in selected_chunks:
+        for batch in _batched(selected_chunks, batch_size):
+            prepared_batch = self._prepare_chunk_batch(batch, db)
+            self._upsert_prepared_batch(prepared_batch)
+
+            for prepared in prepared_batch:
+                if hasattr(db, "update_chunk_vector_id"):
+                    db.update_chunk_vector_id(
+                        prepared["chunk_id"],
+                        prepared["vector_id"],
+                    )
+                added_count += 1
+                if progress_callback is not None:
+                    progress_callback(added_count, total_count, prepared["chunk"])
+
+        return added_count
+
+    def _prepare_chunk_batch(
+        self,
+        chunks: list[dict],
+        db: MetadataDB,
+    ) -> list[dict]:
+        """Prepare chunk text, metadata, ids, and embeddings for one upsert batch."""
+
+        prepared_batch: list[dict] = []
+
+        for chunk in chunks:
             chunk_id = _require_int(chunk, "id")
             document_id = _require_int(chunk, "document_id")
             entity_id = _require_int(chunk, "entity_id")
+            text = _require_text(chunk, "text")
 
             document = db.get_document(document_id)
             if document is None:
@@ -172,14 +238,70 @@ class ChromaVectorStore:
             if entity is None:
                 raise VectorStoreError(f"Missing entity metadata for chunk {chunk_id}.")
 
-            vector_id = self.add_chunk(chunk, document, entity)
-            if hasattr(db, "update_chunk_vector_id"):
-                db.update_chunk_vector_id(chunk_id, vector_id)
-            added_count += 1
-            if progress_callback is not None:
-                progress_callback(added_count, total_count, chunk)
+            try:
+                embedding = self.embedding_client.embed_text(text)
+            except Exception as exc:
+                raise VectorStoreError(
+                    f"Failed to embed chunk {chunk_id} for Chroma: {exc}"
+                ) from exc
 
-        return added_count
+            vector_id = f"chunk-{chunk_id}"
+            metadata = self.build_metadata(
+                chunk,
+                document,
+                entity,
+                model=self.embedding_client.model,
+            )
+            prepared_batch.append(
+                {
+                    "chunk": chunk,
+                    "chunk_id": chunk_id,
+                    "entity_id": entity_id,
+                    "shard_index": _get_shard_index(entity_id, self.shard_count),
+                    "vector_id": vector_id,
+                    "text": text,
+                    "embedding": ensure_embedding_vector(embedding),
+                    "metadata": metadata,
+                }
+            )
+
+        return prepared_batch
+
+    def _upsert_prepared_batch(self, prepared_batch: list[dict]) -> None:
+        """Upsert one prepared batch into Chroma."""
+
+        if not prepared_batch:
+            return
+
+        grouped_items: dict[int, list[dict]] = {}
+        for item in prepared_batch:
+            grouped_items.setdefault(int(item["shard_index"]), []).append(item)
+
+        for shard_index, shard_items in grouped_items.items():
+            collection = self.collections[shard_index]
+            collection_name = _get_shard_collection_name(
+                self.collection_name,
+                shard_index,
+            )
+            try:
+                collection.upsert(
+                    ids=[item["vector_id"] for item in shard_items],
+                    embeddings=[item["embedding"] for item in shard_items],
+                    documents=[item["text"] for item in shard_items],
+                    metadatas=[item["metadata"] for item in shard_items],
+                )
+            except Exception as exc:
+                first_chunk_id = shard_items[0]["chunk_id"]
+                raise VectorStoreError(
+                    "Failed to add Chroma batch starting at chunk "
+                    f"{first_chunk_id} to {collection_name}: {exc}"
+                ) from exc
+
+    def _get_entity_shard_collection(self, entity_id: int):
+        """Return the shard collection for an entity id."""
+
+        shard_index = _get_shard_index(entity_id, self.shard_count)
+        return self.collections[shard_index]
 
     def search(
         self,
@@ -202,17 +324,34 @@ class ChromaVectorStore:
 
         try:
             query_embedding = self.embedding_client.embed_text(query)
-            query_kwargs = {
-                "query_embeddings": [query_embedding],
-                "n_results": top_k,
-            }
-            if where is not None:
-                query_kwargs["where"] = where
-            result = self.collection.query(**query_kwargs)
+            search_results: list[VectorSearchResult] = []
+            for shard_index, collection in self.collections.items():
+                collection_name = _get_shard_collection_name(
+                    self.collection_name,
+                    shard_index,
+                )
+                query_kwargs = {
+                    "query_embeddings": [query_embedding],
+                    "n_results": top_k,
+                }
+                if where is not None:
+                    query_kwargs["where"] = where
+                try:
+                    if int(collection.count()) == 0:
+                        continue
+                    result = collection.query(**query_kwargs)
+                except Exception as exc:
+                    raise VectorStoreError(
+                        f"Failed to search Chroma shard {collection_name}: {exc}"
+                    ) from exc
+                search_results.extend(_parse_search_results(result))
         except Exception as exc:
+            if isinstance(exc, VectorStoreError):
+                raise
             raise VectorStoreError(f"Failed to search Chroma collection: {exc}") from exc
 
-        return _parse_search_results(result)
+        search_results.sort(key=_distance_sort_key)
+        return search_results[:top_k]
 
     def get_intro_chunks(
         self,
@@ -234,17 +373,23 @@ class ChromaVectorStore:
 
         where = _build_where_filter(entity_type, clean_entity_names)
 
-        try:
-            result = self.collection.get(
-                where=where,
-                include=["documents", "metadatas"],
+        results: list[VectorSearchResult] = []
+        for shard_index, collection in self.collections.items():
+            collection_name = _get_shard_collection_name(
+                self.collection_name,
+                shard_index,
             )
-        except Exception as exc:
-            raise VectorStoreError(
-                f"Failed to get intro chunks from Chroma collection: {exc}"
-            ) from exc
+            try:
+                result = collection.get(
+                    where=where,
+                    include=["documents", "metadatas"],
+                )
+            except Exception as exc:
+                raise VectorStoreError(
+                    f"Failed to get intro chunks from {collection_name}: {exc}"
+                ) from exc
+            results.extend(_parse_get_results(result))
 
-        results = _parse_get_results(result)
         results.sort(key=_intro_sort_key)
 
         selected_results: list[VectorSearchResult] = []
@@ -267,18 +412,116 @@ class ChromaVectorStore:
         return selected_results
 
     def count(self) -> int:
-        """Return the number of items in the Chroma collection."""
+        """Return the number of items across all Chroma shard collections."""
+
+        return sum(self.get_shard_counts().values())
+
+    def get_shard_counts(self) -> dict[str, int]:
+        """Return item counts keyed by shard collection name."""
+
+        counts: dict[str, int] = {}
+        for shard_index, collection in self.collections.items():
+            collection_name = _get_shard_collection_name(
+                self.collection_name,
+                shard_index,
+            )
+            try:
+                counts[collection_name] = int(collection.count())
+            except Exception as exc:
+                raise VectorStoreError(
+                    f"Failed to count Chroma shard {collection_name}: {exc}"
+                ) from exc
+        return counts
+
+    def get_sample_results(self, limit: int = 1) -> list[VectorSearchResult]:
+        """Return up to limit stored items from the shard collections."""
+
+        if limit <= 0:
+            raise ValueError("limit must be positive.")
+
+        sample_results: list[VectorSearchResult] = []
+        for shard_index, collection in self.collections.items():
+            remaining = limit - len(sample_results)
+            if remaining <= 0:
+                break
+            collection_name = _get_shard_collection_name(
+                self.collection_name,
+                shard_index,
+            )
+            try:
+                result = collection.get(
+                    limit=remaining,
+                    include=["documents", "metadatas"],
+                )
+            except Exception as exc:
+                raise VectorStoreError(
+                    f"Failed to sample Chroma shard {collection_name}: {exc}"
+                ) from exc
+            sample_results.extend(_parse_get_results(result))
+
+        return sample_results[:limit]
+
+    def _count_one_collection(self, collection_name: str, collection) -> int:
+        """Return one collection count with a shard-aware error message."""
 
         try:
-            return int(self.collection.count())
+            return int(collection.count())
         except Exception as exc:
-            raise VectorStoreError(f"Failed to count Chroma collection: {exc}") from exc
+            raise VectorStoreError(
+                f"Failed to count Chroma shard {collection_name}: {exc}"
+            ) from exc
 
 
 def get_collection():
     """Return the configured Chroma collection."""
 
     return ChromaVectorStore().collection
+
+
+def _get_shard_index(entity_id: int, shard_count: int) -> int:
+    """Return a deterministic shard index for an entity id."""
+
+    if shard_count <= 0:
+        raise ValueError("shard_count must be positive.")
+    digest = hashlib.sha256(str(entity_id).encode("utf-8")).hexdigest()
+    return int(digest, 16) % shard_count
+
+
+def _get_shard_collection_name(base_name: str, shard_index: int) -> str:
+    """Return the Chroma collection name for a shard index."""
+
+    return f"{base_name}_shard_{shard_index:02d}"
+
+
+def _is_shard_collection_name(collection_name: str, base_name: str) -> bool:
+    """Return True if collection_name looks like one of this store's shards."""
+
+    prefix = f"{base_name}_shard_"
+    suffix = collection_name.removeprefix(prefix)
+    return collection_name.startswith(prefix) and suffix.isdigit()
+
+
+def _list_existing_collection_names(client: object) -> list[str]:
+    """Return existing Chroma collection names when the client supports listing."""
+
+    list_collections = getattr(client, "list_collections", None)
+    if list_collections is None:
+        return []
+
+    try:
+        collections = list_collections()
+    except Exception:
+        return []
+
+    names: list[str] = []
+    for collection in collections:
+        if isinstance(collection, str):
+            names.append(collection)
+            continue
+        name = getattr(collection, "name", None)
+        if name is not None:
+            names.append(str(name))
+    return names
 
 
 def _build_where_filter(
@@ -323,6 +566,15 @@ def _normalize_entity_names(entity_names: list[str] | None) -> list[str]:
         names.append(clean_name)
         seen.add(name_key)
     return names
+
+
+def _batched(items: list[dict], batch_size: int) -> list[list[dict]]:
+    """Split items into deterministic non-empty batches."""
+
+    return [
+        items[index : index + batch_size]
+        for index in range(0, len(items), batch_size)
+    ]
 
 
 def _parse_search_results(result: Any) -> list[VectorSearchResult]:
@@ -382,6 +634,14 @@ def _intro_sort_key(result: VectorSearchResult) -> tuple[str, int]:
     except (TypeError, ValueError):
         chunk_index = 0
     return (entity_name, chunk_index)
+
+
+def _distance_sort_key(result: VectorSearchResult) -> tuple[bool, float]:
+    """Sort semantic results by distance, with missing distances last."""
+
+    if result.distance is None:
+        return (True, float("inf"))
+    return (False, result.distance)
 
 
 def _first_result_list(value: Any) -> list[Any]:

@@ -45,11 +45,11 @@ class FakeDB:
         """Return deterministic counts."""
 
         return {
-            "entities": 100,
+            "entities": 50,
             "documents": 100,
             "chunks": 250,
-            "people": 50,
-            "places": 50,
+            "people": 25,
+            "places": 25,
             "successful_documents": 98,
             "failed_documents": 2,
         }
@@ -163,9 +163,9 @@ class TestAppHelpers(unittest.TestCase):
             vector_store_factory=FakeVectorStore,
         )
 
-        self.assertEqual(status["counts"]["entities"], 100)
-        self.assertEqual(status["counts"]["people"], 50)
-        self.assertEqual(status["counts"]["places"], 50)
+        self.assertEqual(status["counts"]["entities"], 50)
+        self.assertEqual(status["counts"]["people"], 25)
+        self.assertEqual(status["counts"]["places"], 25)
         self.assertEqual(status["vector_count"], 250)
         self.assertIsNone(status["database_error"])
         self.assertIsNone(status["vector_error"])
@@ -377,7 +377,9 @@ class TestAppHelpers(unittest.TestCase):
             state["messages"],
             [{"role": "user", "content": "Who was Albert Einstein?"}],
         )
-        self.assertEqual(executor.submitted[1], ("Who was Albert Einstein?",))
+        submitted = executor.submitted
+        assert submitted is not None
+        self.assertEqual(submitted[1], ("Who was Albert Einstein?",))
 
     def test_start_generation_ignores_prompt_while_generating(self) -> None:
         """A second prompt should not be accepted while generation is active."""

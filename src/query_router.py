@@ -297,5 +297,10 @@ def _is_safe_alias(alias: str) -> bool:
 def _all_candidates_are_people(candidates: list[str]) -> bool:
     """Return whether the provided candidates all come from the people list."""
 
+    if not candidates:
+        return False
     people = set(get_people())
-    return bool(candidates) and all(candidate in people for candidate in candidates)
+    places = set(get_places())
+    return all(candidate in people for candidate in candidates) or not any(
+        candidate in places for candidate in candidates
+    )

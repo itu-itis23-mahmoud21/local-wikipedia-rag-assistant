@@ -486,6 +486,20 @@ class MetadataDB:
 
         return cleared_count
 
+    def count_chunk_vector_ids(self) -> int:
+        """Return the number of chunks that currently have a stored vector id."""
+
+        with closing(self.connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM chunks
+                WHERE vector_id IS NOT NULL;
+                """
+            ).fetchone()
+
+        return int(row["count"])
+
     def start_ingestion_run(
         self,
         total_entities: int,

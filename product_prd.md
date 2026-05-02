@@ -27,11 +27,11 @@ vector database, SQLite metadata, and a local Ollama LLM.
 ## Core Requirements
 
 - Ingest Wikipedia pages for configured entities.
-- Include 50 famous people and 50 famous places.
+- Include 25 famous people and 25 famous places.
 - Store entity, document, chunk, and ingestion metadata in SQLite.
 - Split processed articles into retrieval chunks.
 - Generate embeddings locally with Ollama `nomic-embed-text`.
-- Store all vectors in one Chroma collection with metadata.
+- Store vectors in sharded Chroma collections with metadata.
 - Route queries as `person`, `place`, `both`, or `unknown`. 
 - Retrieve relevant chunks from Chroma.
 - Generate grounded answers with Ollama `llama3.2:3b`.

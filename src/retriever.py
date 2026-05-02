@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
+from typing import Any
 
 from src import config
 from src.query_router import (
@@ -35,7 +36,7 @@ class RAGRetriever:
 
     def __init__(
         self,
-        vector_store: ChromaVectorStore | None = None,
+        vector_store: Any | None = None,
         top_k: int = config.DEFAULT_TOP_K,
     ) -> None:
         """Create a retriever with a vector store and default result count."""

@@ -41,30 +41,30 @@ class TestEntities(unittest.TestCase):
         self.assertIsInstance(entities.PEOPLE, list)
         self.assertIsInstance(entities.PLACES, list)
 
-    def test_people_count_is_50(self) -> None:
-        """The homework configuration should include exactly 50 people."""
+    def test_people_count_is_25(self) -> None:
+        """The homework configuration should include exactly 25 people."""
 
-        self.assertEqual(len(entities.PEOPLE), 50)
+        self.assertEqual(len(entities.PEOPLE), 25)
 
-    def test_places_count_is_50(self) -> None:
-        """The homework configuration should include exactly 50 places."""
+    def test_places_count_is_25(self) -> None:
+        """The homework configuration should include exactly 25 places."""
 
-        self.assertEqual(len(entities.PLACES), 50)
+        self.assertEqual(len(entities.PLACES), 25)
 
-    def test_total_entities_count_is_100(self) -> None:
-        """People and places together should total 100 entities."""
+    def test_total_entities_count_is_50(self) -> None:
+        """People and places together should total 50 entities."""
 
-        self.assertEqual(len(entities.get_all_entities()), 100)
+        self.assertEqual(len(entities.get_all_entities()), 50)
 
     def test_required_hw_people_are_included(self) -> None:
-        """The first required HW people should be present."""
+        """The required HW people should be present."""
 
         for person in REQUIRED_HW_PEOPLE:
             with self.subTest(person=person):
                 self.assertIn(person, entities.PEOPLE)
 
     def test_required_hw_places_are_included(self) -> None:
-        """The first required HW places should be present."""
+        """The required HW places should be present."""
 
         for place in REQUIRED_HW_PLACES:
             with self.subTest(place=place):
@@ -78,7 +78,6 @@ class TestEntities(unittest.TestCase):
     def test_accented_homework_names_are_exact(self) -> None:
         """Names with non-ASCII characters should match the homework list."""
 
-        self.assertIn("Beyoncé", entities.PEOPLE)
         self.assertIn("Sagrada Família", entities.PLACES)
         self.assertIn("Topkapı Palace", entities.PLACES)
 
@@ -96,12 +95,12 @@ class TestEntities(unittest.TestCase):
         self.assertTrue(entities.is_known_entity("eiffel tower"))
         self.assertFalse(entities.is_known_entity("Unknown Entity"))
 
-    def test_get_entity_records_returns_100_entity_records(self) -> None:
+    def test_get_entity_records_returns_50_entity_records(self) -> None:
         """Entity records should include all configured people and places."""
 
         records = entities.get_entity_records()
 
-        self.assertEqual(len(records), 100)
+        self.assertEqual(len(records), 50)
         self.assertTrue(all(isinstance(record, entities.Entity) for record in records))
 
     def test_returned_lists_are_copies(self) -> None:
@@ -119,8 +118,8 @@ class TestEntities(unittest.TestCase):
         self.assertNotIn("Temporary Place", entities.PLACES)
         self.assertNotIn("Temporary Entity", entities.PEOPLE)
         self.assertNotIn("Temporary Entity", entities.PLACES)
-        self.assertEqual(len(entities.PEOPLE), 50)
-        self.assertEqual(len(entities.PLACES), 50)
+        self.assertEqual(len(entities.PEOPLE), 25)
+        self.assertEqual(len(entities.PLACES), 25)
 
     def test_validate_entities_does_not_raise(self) -> None:
         """The current configuration should pass validation."""

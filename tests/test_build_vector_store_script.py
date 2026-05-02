@@ -2,6 +2,8 @@
 
 from contextlib import redirect_stdout
 import io
+from pathlib import Path
+import tempfile
 import unittest
 
 from scripts import build_vector_store
@@ -44,6 +46,121 @@ class TestBuildVectorStoreScript(unittest.TestCase):
         args = build_vector_store.parse_args(["--progress-every", "10"])
 
         self.assertEqual(args.progress_every, 10)
+
+    def test_parse_args_accepts_batch_size(self) -> None:
+        """CLI parsing should accept the Chroma batch size option."""
+
+        args = build_vector_store.parse_args(["--batch-size", "25"])
+
+        self.assertEqual(args.batch_size, 25)
+
+    def test_parse_args_accepts_shard_count(self) -> None:
+        """CLI parsing should accept the Chroma shard count option."""
+
+        args = build_vector_store.parse_args(["--shard-count", "10"])
+
+        self.assertEqual(args.shard_count, 10)
+
+    def test_parse_args_accepts_reset_chroma_dir(self) -> None:
+        """CLI parsing should accept the Chroma directory reset option."""
+
+        args = build_vector_store.parse_args(["--reset-chroma-dir"])
+
+        self.assertTrue(args.reset_chroma_dir)
+
+    def test_parse_args_accepts_post_build_health_check_flags(self) -> None:
+        """CLI parsing should support enabling and disabling health checks."""
+
+        enabled_args = build_vector_store.parse_args(["--post-build-health-check"])
+        disabled_args = build_vector_store.parse_args(["--skip-post-build-health-check"])
+
+        self.assertTrue(enabled_args.post_build_health_check)
+        self.assertFalse(disabled_args.post_build_health_check)
+
+    def test_parse_args_accepts_post_build_settle_seconds(self) -> None:
+        """CLI parsing should accept the post-build settle delay."""
+
+        args = build_vector_store.parse_args(["--post-build-settle-seconds", "1.5"])
+
+        self.assertEqual(args.post_build_settle_seconds, 1.5)
+
+    def test_print_vector_build_start_includes_shard_count(self) -> None:
+        """Build start output should include the configured shard count."""
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            build_vector_store.print_vector_build_start(
+                selected_count=100,
+                progress_every=25,
+                db_path=Path("metadata.sqlite"),
+                batch_size=50,
+                shard_count=10,
+                post_build_health_check=True,
+                reset_chroma_dir=False,
+            )
+
+        self.assertIn("Shard count: 10", output.getvalue())
+
+    def test_health_check_subprocess_helper_returns_success(self) -> None:
+        """Post-build health check should return True on exit code zero."""
+
+        calls: list[list[str]] = []
+
+        def runner(command: list[str], timeout: int) -> tuple[bool, str]:
+            calls.append(command)
+            self.assertEqual(timeout, 120)
+            return True, "health ok"
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            result = build_vector_store.run_post_build_health_check(
+                query="Who is Albert Einstein?",
+                entity="Albert Einstein",
+                entity_type="person",
+                command_runner=runner,
+            )
+
+        self.assertTrue(result)
+        self.assertIn("health ok", output.getvalue())
+        self.assertIn("--query", calls[0])
+        self.assertIn("--entity", calls[0])
+        self.assertIn("--shard-count", calls[0])
+
+    def test_health_check_subprocess_helper_returns_failure(self) -> None:
+        """Post-build health check should return False on nonzero exit."""
+
+        def runner(command: list[str], timeout: int) -> tuple[bool, str]:
+            del command, timeout
+            return False, "query failed"
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            result = build_vector_store.run_post_build_health_check(
+                query="Who is Albert Einstein?",
+                command_runner=runner,
+            )
+
+        self.assertFalse(result)
+        self.assertIn("query failed", output.getvalue())
+
+    def test_reset_chroma_dir_deletes_only_chroma_directory(self) -> None:
+        """reset_chroma_directory should remove Chroma data but leave SQLite data."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            chroma_dir = root / "chroma_db"
+            sqlite_dir = root / "data" / "sqlite"
+            chroma_dir.mkdir()
+            sqlite_dir.mkdir(parents=True)
+            (chroma_dir / "index.bin").write_text("fake", encoding="utf-8")
+            sqlite_file = sqlite_dir / "rag_metadata.sqlite"
+            sqlite_file.write_text("sqlite", encoding="utf-8")
+
+            removed = build_vector_store.reset_chroma_directory(chroma_dir)
+
+            self.assertTrue(removed)
+            self.assertFalse(chroma_dir.exists())
+            self.assertTrue(sqlite_file.exists())
 
     def test_gpu_preflight_handles_nvidia_smi_success(self) -> None:
         """GPU preflight should pass when NVIDIA and Ollama checks pass."""

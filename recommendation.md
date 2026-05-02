@@ -105,7 +105,7 @@ preserving a clear privacy boundary.
 
 ## Limitations
 
-- The prototype covers a fixed set of 100 entities.
+- The prototype covers a fixed set of 50 entities.
 - Wikipedia extraction can fail or change over time.
 - Rule-based query routing is simple and may misclassify ambiguous questions.
 - Local model quality depends on available hardware and model size.
