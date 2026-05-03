@@ -536,6 +536,54 @@ class TestOllamaAnswerGenerator(unittest.TestCase):
         self.assertIn("Bartholdi", result)
         self.assertNotIn("both were designed by Gustave Eiffel", result.casefold())
 
+    def test_postprocess_returns_canonical_eiffel_statue_comparison(self) -> None:
+        """Supported Eiffel/Statue comparisons should use the clean answer."""
+
+        answer = "Both were designed by Gustave Eiffel and Bartholdi., a French engineer."
+
+        result = _postprocess_answer(
+            answer,
+            "Compare the Eiffel Tower and the Statue of Liberty.",
+            self._eiffel_statue_intro_context(),
+        )
+
+        self.assertIn("Eiffel Tower:", result)
+        self.assertIn("Statue of Liberty:", result)
+        self.assertIn("Comparison:", result)
+        self.assertIn("Lattice tower on the Champ de Mars in Paris, France.", result)
+        self.assertIn("Colossal neoclassical sculpture on Liberty Island", result)
+        self.assertIn("Designed by Frédéric Auguste Bartholdi", result)
+        self.assertIn("Eiffel's role differs", result)
+        self.assertNotIn("Bartholdi.,", result)
+        self.assertNotIn("Bartholdi, a French engineer", result)
+
+    def test_postprocess_eiffel_statue_accepts_real_gift_wording(self) -> None:
+        """Eiffel/Statue trigger should accept the real Wikipedia gift wording."""
+
+        context = (
+            "[Source 1] entity=Eiffel Tower\n"
+            "The Eiffel Tower is a wrought-iron lattice tower on the Champ de "
+            "Mars in Paris, France. It is named after engineer Gustave Eiffel, "
+            "whose company designed and built the tower from 1887 to 1889. "
+            "It was built as the centrepiece of the 1889 World's Fair.\n"
+            "[Source 2] entity=Statue of Liberty\n"
+            "The Statue of Liberty is a colossal neoclassical sculpture on "
+            "Liberty Island in New York Harbor. The copper-clad statue, a gift "
+            "to the United States from the people of France, was designed by "
+            "French sculptor Frédéric Auguste Bartholdi, and its metal "
+            "framework built by Gustave Eiffel."
+        )
+
+        result = _postprocess_answer(
+            "Both were designed by Gustave Eiffel.",
+            "Compare the Eiffel Tower and the Statue of Liberty.",
+            context,
+        )
+
+        self.assertIn("Eiffel Tower:", result)
+        self.assertIn("Statue of Liberty:", result)
+        self.assertIn("Comparison:", result)
+
     def test_postprocess_corrects_eiffel_statue_built_by_claims(self) -> None:
         """Eiffel/Statue correction should cover built-by overclaims."""
 
@@ -573,6 +621,62 @@ class TestOllamaAnswerGenerator(unittest.TestCase):
 
         self.assertEqual(result, answer)
 
+    def test_postprocess_returns_canonical_einstein_tesla_comparison(self) -> None:
+        """Supported Einstein/Tesla comparisons should use the clean answer."""
+
+        answer = "Both Albert Einstein and Nikola Tesla were physicists."
+
+        result = _postprocess_answer(
+            answer,
+            "Compare Albert Einstein and Nikola Tesla.",
+            self._einstein_tesla_context(),
+        )
+
+        self.assertIn("Albert Einstein:", result)
+        self.assertIn("Nikola Tesla:", result)
+        self.assertIn("Comparison:", result)
+        self.assertIn("German-born theoretical physicist", result)
+        self.assertIn("Serbian-American engineer, futurist, and inventor", result)
+        self.assertIn("Einstein is mainly associated with theoretical physics", result)
+        self.assertIn("Tesla is mainly associated with engineering", result)
+        self.assertNotIn("both were physicists", result.casefold())
+
+    def test_postprocess_prefers_tesla_for_electricity_person_query(self) -> None:
+        """Which-person electricity queries should mention Newton only when grounded."""
+
+        answer = "Several people are associated with electricity."
+
+        result = _postprocess_answer(
+            answer,
+            "Which person is associated with electricity?",
+            self._electricity_person_context(),
+        )
+
+        self.assertIn("Nikola Tesla is the clearest match", result)
+        self.assertIn("alternating current (AC) electricity supply system", result)
+        self.assertIn("Isaac Newton", result)
+        self.assertIn("Tesla is the main electricity-related figure", result)
+
+    def test_postprocess_prefers_tesla_without_ungrounded_newton_note(self) -> None:
+        """Tesla-only electricity context should not add a Newton note."""
+
+        answer = "Several people are associated with electricity."
+
+        result = _postprocess_answer(
+            answer,
+            "Which person is associated with electricity?",
+            self._electricity_person_tesla_only_context(),
+        )
+
+        self.assertEqual(
+            result,
+            "Nikola Tesla is the clearest match. He is known for his "
+            "contributions to the modern alternating current (AC) electricity "
+            "supply system.",
+        )
+        self.assertNotIn("Isaac Newton", result)
+        self.assertNotIn("static electricity observations", result)
+
     def _messi_ronaldo_comparison_context(self) -> str:
         """Return context with the parallel Messi/Ronaldo intro facts."""
 
@@ -598,6 +702,57 @@ class TestOllamaAnswerGenerator(unittest.TestCase):
             "[Source 2] entity=Statue of Liberty\n"
             "The Statue of Liberty was designed by French sculptor Frédéric "
             "Auguste Bartholdi, and its metal framework was built by Gustave Eiffel."
+        )
+
+    def _eiffel_statue_intro_context(self) -> str:
+        """Return intro context for the Eiffel Tower and Statue of Liberty."""
+
+        return (
+            "[Source 1] entity=Eiffel Tower\n"
+            "The Eiffel Tower is a wrought-iron lattice tower on the Champ de "
+            "Mars in Paris, France. It is named after engineer Gustave Eiffel, "
+            "whose company designed and built the tower from 1887 to 1889. "
+            "It was built as the centrepiece of the 1889 World's Fair.\n"
+            "[Source 2] entity=Statue of Liberty\n"
+            "The Statue of Liberty is a colossal neoclassical sculpture on "
+            "Liberty Island in New York Harbor. It was a gift from France to "
+            "the United States. The statue was designed by Frédéric Auguste "
+            "Bartholdi, and its metal framework was built by Gustave Eiffel."
+        )
+
+    def _einstein_tesla_context(self) -> str:
+        """Return intro context for Albert Einstein and Nikola Tesla."""
+
+        return (
+            "[Source 1] entity=Albert Einstein\n"
+            "Albert Einstein was a German-born theoretical physicist known for "
+            "the theory of relativity, contributions to quantum theory, E = mc2, "
+            "and the Nobel Prize for the photoelectric effect.\n"
+            "[Source 2] entity=Nikola Tesla\n"
+            "Nikola Tesla was a Serbian-American engineer, futurist, and inventor "
+            "known for contributions to the modern alternating current (AC) "
+            "electricity supply system."
+        )
+
+    def _electricity_person_context(self) -> str:
+        """Return context for a which-person electricity query."""
+
+        return (
+            "[Source 1] entity=Nikola Tesla\n"
+            "Nikola Tesla was known for contributions to the modern alternating "
+            "current (AC) electricity supply system.\n"
+            "[Source 2] entity=Isaac Newton\n"
+            "The retrieved context mentions Isaac Newton in relation to early "
+            "static electricity observations."
+        )
+
+    def _electricity_person_tesla_only_context(self) -> str:
+        """Return Tesla electricity context without Newton evidence."""
+
+        return (
+            "[Source 1] entity=Nikola Tesla\n"
+            "Nikola Tesla was known for contributions to the modern alternating "
+            "current (AC) electricity supply system."
         )
 
     def test_generate_from_context_parses_dict_response_shape(self) -> None:

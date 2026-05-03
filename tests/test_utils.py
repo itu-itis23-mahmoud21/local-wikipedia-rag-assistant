@@ -47,14 +47,32 @@ class TestPathUtilities(unittest.TestCase):
                 project_root / "data" / "processed" / "person" / "einstein.txt",
             )
 
-    def test_resolve_project_path_recovers_legacy_absolute_data_suffix(self) -> None:
-        """Stale absolute paths should recover their data/... suffix when possible."""
+    def test_resolve_project_path_recovers_windows_forward_slash_path(self) -> None:
+        """Windows drive paths with forward slashes should recover data/... suffix."""
 
         with TemporaryDirectory() as temporary_dir:
             project_root = Path(temporary_dir)
-            legacy_path = Path("C:/old/project/data/processed/person/einstein.txt")
 
-            resolved_path = resolve_project_path(legacy_path, project_root=project_root)
+            resolved_path = resolve_project_path(
+                "C:/old/project/data/processed/person/einstein.txt",
+                project_root=project_root,
+            )
+
+            self.assertEqual(
+                resolved_path,
+                project_root / "data" / "processed" / "person" / "einstein.txt",
+            )
+
+    def test_resolve_project_path_recovers_windows_backslash_path(self) -> None:
+        """Windows drive paths with backslashes should recover data/... suffix."""
+
+        with TemporaryDirectory() as temporary_dir:
+            project_root = Path(temporary_dir)
+
+            resolved_path = resolve_project_path(
+                r"E:\old\project\data\processed\person\einstein.txt",
+                project_root=project_root,
+            )
 
             self.assertEqual(
                 resolved_path,

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
+import re
 
 from src import config
 
@@ -60,6 +61,10 @@ def resolve_project_path(
     root = Path(project_root).resolve()
     candidate = Path(path_text)
 
+    windows_data_path = _recover_windows_project_data_path(path_text, root)
+    if windows_data_path is not None:
+        return windows_data_path
+
     if not candidate.is_absolute():
         return root / candidate
 
@@ -81,3 +86,26 @@ def _recover_project_data_path(path: Path, project_root: Path) -> Path | None:
         if part.casefold() == "data":
             return project_root.joinpath(*parts[index:])
     return None
+
+
+def _recover_windows_project_data_path(path_text: str, project_root: Path) -> Path | None:
+    """Recover data/... from stale Windows paths on any operating system."""
+
+    if not _looks_like_windows_absolute_path(path_text):
+        return None
+
+    windows_path = PureWindowsPath(path_text)
+    for index, part in enumerate(windows_path.parts):
+        if part.casefold() == "data":
+            return project_root.joinpath(*windows_path.parts[index:])
+    return None
+
+
+def _looks_like_windows_absolute_path(path_text: str) -> bool:
+    """Return whether text looks like a Windows drive or UNC absolute path."""
+
+    return bool(
+        re.match(r"^[A-Za-z]:[\\/]", path_text)
+        or path_text.startswith("\\\\")
+        or path_text.startswith("//")
+    )
