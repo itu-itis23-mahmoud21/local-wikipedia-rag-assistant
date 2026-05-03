@@ -1,77 +1,91 @@
-# Local Wikipedia RAG Assistant
+# 🤖 Local Wikipedia RAG Assistant
 
-## Overview
+A local ChatGPT-style Retrieval-Augmented Generation assistant for famous people
+and famous places. The app ingests Wikipedia pages, stores local metadata,
+creates embeddings with Ollama, indexes chunks in Chroma, and answers questions
+through a Streamlit chat interface.
 
-Local Wikipedia RAG Assistant is a localhost-only retrieval-augmented generation
-assistant that answers questions about famous people and famous places using
-locally ingested Wikipedia data.
+This project was built for **HW3 - AI Aided Computer Engineering**.
 
-The system downloads Wikipedia article text, stores local metadata in SQLite,
-chunks the documents, embeds chunks with a local Ollama embedding model, stores
-vectors in Chroma, retrieves relevant chunks for a user question, and generates
-grounded answers with a local Ollama language model.
+---
 
-## Course Context
+## ✨ What It Does
 
-This repository is HW3 for the AI Aided Computer Engineering course. The goal is
-to build a simplified local ChatGPT-style RAG system without external LLM APIs.
+- Answers questions about **25 famous people** and **25 famous places**
+- Uses Wikipedia as the source dataset
+- Runs generation and embeddings locally with **Ollama**
+- Stores metadata in **SQLite**
+- Stores vectors in **sharded Chroma collections**
+- Routes questions as person, place, both, or unknown
+- Shows retrieved sources and retrieved context
+- Supports copy buttons, chat export, and local system status
+- Returns **"I don't know."** when retrieved context does not support an answer
 
-## Features
+---
 
-- 25 configured famous people and 25 configured famous places
-- Wikipedia ingestion through the MediaWiki API
-- Local SQLite metadata database
-- Deterministic document chunking
-- Local embeddings with Ollama `nomic-embed-text`
-- Persistent Chroma vector store
-- Query routing for `person`, `place`, `both`, and `unknown`
-- Local answer generation with Ollama `llama3.2:3b`
-- Streamlit chat UI
-- Retrieved source and context display
-- Setup and reset scripts
-
-## Architecture
+## 🧱 Architecture
 
 ```text
 Wikipedia API
-  -> local files
+  -> raw local files
+  -> processed local files
   -> SQLite metadata
-  -> chunking
+  -> document chunks
   -> Ollama embeddings
-  -> Chroma vector store
+  -> sharded Chroma vector store
   -> retriever
   -> Ollama LLM
   -> Streamlit UI
 ```
 
-## Tech Stack
+---
 
-- Python
+## 🛠 Tech Stack
+
+- Python 3.10+
 - Streamlit
 - Ollama
-- `llama3.2:3b`
-- `nomic-embed-text`
-- Chroma
+- `llama3.2:3b` for local answer generation
+- `nomic-embed-text` for local embeddings
+- ChromaDB
 - SQLite
-- requests
-- unittest
+- Requests
+- Python `unittest`
 
-## Local-Only Guarantee
+---
 
-- No external LLM API is used.
-- Ollama runs both generation and embeddings locally.
-- Wikipedia is used only for ingestion and source data collection.
-- Retrieved context, prompts, embeddings, generated answers, SQLite metadata,
-  and Chroma vectors stay on the local machine.
+## 🔒 Local-Only Guarantee
 
-## Prerequisites
+No external LLM API is used.
 
-- Python 3.10+ or 3.11+
+- Ollama runs the language model locally.
+- Ollama generates embeddings locally.
+- SQLite and Chroma data stay on your machine.
+- Wikipedia is contacted only during ingestion.
+- Prompts, retrieved context, embeddings, and answers are not sent to external
+  LLM services.
+
+---
+
+## ✅ Prerequisites
+
+Install these before running the project:
+
+- Python 3.10 or newer
 - Git
-- Ollama installed and running
-- Enough disk space for local article text, SQLite metadata, and Chroma vectors
+- Ollama
+- Enough disk space for Wikipedia text, SQLite metadata, and Chroma vectors
 
-## Setup
+Check Ollama:
+
+```powershell
+ollama --version
+ollama list
+```
+
+---
+
+## 📦 Install Dependencies
 
 Create and activate a virtual environment:
 
@@ -80,105 +94,195 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
-Install dependencies:
+Install Python packages:
 
 ```powershell
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-Pull the local Ollama models:
+---
+
+## 🧠 Run the Local Models
+
+Start Ollama, then pull the required models:
 
 ```powershell
 ollama pull llama3.2:3b
 ollama pull nomic-embed-text
 ```
 
-## Build Local Data
+Keep Ollama running while building vectors and using the app.
 
-Recommended full build:
-
-```powershell
-python scripts/setup_all.py --reset-db --reset-chunks --reset-collection
-```
-
-Quick test build with a small subset:
+Useful checks:
 
 ```powershell
-python scripts/setup_all.py --limit 5 --reset-db --reset-chunks --reset-collection
+ollama list
+ollama ps
 ```
 
-The full build fetches Wikipedia pages, chunks documents, generates local
-embeddings, and writes vectors to Chroma. It requires Ollama to be running.
+---
 
-## Manual Pipeline Commands
+## 🗂 Build the Local Dataset
 
-Run these only if you want to execute each stage separately:
+The easiest path is the full setup script:
+
+```powershell
+python scripts/setup_all.py --force-ingest --reset-db --reset-chunks --reset-collection
+```
+
+For a fast smoke test, build only a few entities:
+
+```powershell
+python scripts/setup_all.py --limit 5 --force-ingest --reset-db --reset-chunks --reset-collection
+```
+
+The setup pipeline runs:
+
+1. Wikipedia ingestion
+2. Document chunking
+3. Ollama embedding generation
+4. Chroma vector-store build
+
+---
+
+## 🔁 Manual Pipeline
+
+Use these commands if you want to run each stage separately.
+
+### 1. Ingest Wikipedia pages
 
 ```powershell
 python scripts/ingest_wikipedia.py
-python scripts/chunk_documents.py
-python scripts/build_vector_store.py
 ```
 
-## Run the App
+Useful options:
+
+```powershell
+python scripts/ingest_wikipedia.py --limit 5
+python scripts/ingest_wikipedia.py --entity-type person
+python scripts/ingest_wikipedia.py --force
+python scripts/ingest_wikipedia.py --reset-db
+```
+
+### 2. Chunk processed documents
+
+```powershell
+python scripts/chunk_documents.py --reset-chunks
+```
+
+### 3. Build the vector store
+
+Recommended command:
+
+```powershell
+python scripts/build_vector_store.py --reset-chroma-dir --shard-count 10 --batch-size 50 --progress-every 25 --post-build-settle-seconds 20
+```
+
+Useful options:
+
+```powershell
+python scripts/build_vector_store.py --limit 100
+python scripts/build_vector_store.py --entity-type place
+python scripts/build_vector_store.py --skip-gpu-check
+python scripts/build_vector_store.py --skip-post-build-health-check
+```
+
+---
+
+## 🚀 Start the Application
+
+Run Streamlit:
 
 ```powershell
 streamlit run app.py
 ```
 
-Open the local Streamlit URL printed in the terminal.
+Then open the local URL printed in the terminal, usually:
 
-## Reset Generated Artifacts
-
-This removes generated local data and vector-store files:
-
-```powershell
-python scripts/reset_system.py --yes
+```text
+http://localhost:8501
 ```
 
-Generated artifacts are ignored by Git through `.gitignore`.
+---
 
-## Example Questions
+## 💬 Example Queries
 
-People:
+### People
 
-- Who was Albert Einstein and what is he known for?
+- Who was Albert Einstein?
+- Who is Einstein?
 - What did Marie Curie discover?
 - Why is Mohamed Salah famous?
+- Which person is associated with electricity?
+- Compare Albert Einstein and Nikola Tesla.
 - Compare Lionel Messi and Cristiano Ronaldo.
 
-Places:
+### Places
 
 - Where is the Eiffel Tower located?
 - Which famous place is located in Turkey?
+- Which famous place is in Egypt?
+- Which famous place is in Paris?
+- Which landmark is in New York?
 - What was the Colosseum used for?
-- Where is Mount Everest?
+- Compare the Eiffel Tower and the Statue of Liberty.
 
-Mixed and failure cases:
+### Unsupported / Failure Behavior
 
-- Which person is associated with electricity?
-- Compare Albert Einstein and Nikola Tesla.
 - Who is the president of Mars?
 - Tell me about a random unknown person John Doe.
 
-For questions not supported by retrieved context, the assistant is instructed to
-answer: `I don't know.`
+Expected behavior for unsupported questions:
 
-## Testing
+```text
+I don't know.
+```
 
-Run unit tests:
+---
+
+## 🧪 Run Tests
+
+Run the full unit test suite:
 
 ```powershell
 python -m unittest discover -v
 ```
 
-Compile-check Python files:
+Run a compile check:
 
 ```powershell
 python -m compileall -q app.py src scripts tests
 ```
 
-## Repository Structure
+---
+
+## ♻️ Reset Generated Data
+
+Remove generated local data and Chroma files:
+
+```powershell
+python scripts/reset_system.py --yes
+```
+
+Remove only local data:
+
+```powershell
+python scripts/reset_system.py --yes --data-only
+```
+
+Remove only Chroma vectors:
+
+```powershell
+python scripts/reset_system.py --yes --chroma-only
+```
+
+Generated artifacts such as `data/`, `chroma_db/`, SQLite databases, logs, and
+virtual environments are ignored by Git.
+
+---
+
+## 📁 Repository Structure
 
 ```text
 .
@@ -198,7 +302,8 @@ python -m compileall -q app.py src scripts tests
 |   |-- vector_store.py
 |   |-- query_router.py
 |   |-- retriever.py
-|   `-- generator.py
+|   |-- generator.py
+|   `-- utils.py
 |-- scripts/
 |   |-- ingest_wikipedia.py
 |   |-- chunk_documents.py
@@ -208,38 +313,70 @@ python -m compileall -q app.py src scripts tests
 `-- tests/
 ```
 
-## Troubleshooting
+---
 
-Ollama is not running:
+## 🧯 Troubleshooting
 
-- Start Ollama.
-- Confirm it responds with `ollama list`.
+### Ollama is not running
 
-Models are not pulled:
+Start Ollama and check:
 
-- Run `ollama pull llama3.2:3b`.
-- Run `ollama pull nomic-embed-text`.
+```powershell
+ollama list
+```
 
-Empty vector store:
+### Models are missing
 
-- Run `python scripts/setup_all.py --reset-db --reset-chunks --reset-collection`.
-- For a small check, run the same command with `--limit 5`.
+```powershell
+ollama pull llama3.2:3b
+ollama pull nomic-embed-text
+```
 
-Wikipedia request failure:
+### Chroma/vector store is empty
 
-- Check internet access during ingestion.
-- Rerun ingestion with `python scripts/ingest_wikipedia.py --force`.
+Rebuild local data:
 
-Streamlit cannot start:
+```powershell
+python scripts/setup_all.py --force-ingest --reset-db --reset-chunks --reset-collection
+```
 
-- Confirm dependencies are installed with `pip install -r requirements.txt`.
-- Confirm the virtual environment is activated.
+For a cleaner vector rebuild:
 
-Chroma/data reset:
+```powershell
+python scripts/build_vector_store.py --reset-chroma-dir --shard-count 10 --batch-size 50 --progress-every 25
+```
 
-- Run `python scripts/reset_system.py --yes`.
-- Rebuild with `python scripts/setup_all.py --reset-db --reset-chunks --reset-collection`.
+### Wikipedia ingestion fails
 
-## Demo Video
+- Check internet access.
+- Retry with:
+
+```powershell
+python scripts/ingest_wikipedia.py --force
+```
+
+### Streamlit cannot start
+
+- Activate the virtual environment.
+- Reinstall dependencies:
+
+```powershell
+pip install -r requirements.txt
+```
+
+### GPU usage is unclear
+
+Python does not force Ollama to use GPU. Ollama decides CPU/GPU execution.
+
+Useful checks:
+
+```powershell
+nvidia-smi
+ollama ps
+```
+
+---
+
+## 🎬 Demo Video
 
 Demo video link: TODO - add Loom or unlisted YouTube link before submission.
