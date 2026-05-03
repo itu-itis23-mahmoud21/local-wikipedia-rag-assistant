@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 from pathlib import Path
 import sys
+from typing import Any
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -12,8 +14,9 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src import config
-from src.chunker import chunk_file
+from src.chunker import TextChunk, chunk_file
 from src.database import MetadataDB
+from src.utils import resolve_project_path
 
 
 def parse_args() -> argparse.Namespace:
@@ -69,6 +72,35 @@ def main() -> None:
     if args.limit is not None:
         documents = documents[: args.limit]
 
+    summary = chunk_document_rows(
+        db=db,
+        documents=documents,
+        reset_chunks=args.reset_chunks,
+        chunk_size=args.chunk_size,
+        overlap=args.overlap,
+    )
+
+    print()
+    print("Document chunking summary")
+    print(f"Documents considered: {len(documents)}")
+    print(f"Chunked documents: {summary['chunked_documents']}")
+    print(f"Skipped documents: {summary['skipped_documents']}")
+    print(f"Failed documents: {summary['failed_documents']}")
+    print(f"Chunks deleted: {deleted_chunks}")
+    print(f"Chunks created: {summary['chunks_created']}")
+    print(f"Database path: {db.db_path}")
+
+
+def chunk_document_rows(
+    db: Any,
+    documents: list[dict],
+    reset_chunks: bool,
+    chunk_size: int,
+    overlap: int,
+    chunk_file_func: Callable[..., list[TextChunk]] = chunk_file,
+) -> dict[str, int]:
+    """Chunk document rows and return processing counts."""
+
     chunked_documents = 0
     skipped_documents = 0
     failed_documents = 0
@@ -77,30 +109,35 @@ def main() -> None:
     for document in documents:
         document_id = int(document["id"])
         entity_id = int(document["entity_id"])
-        processed_path_value = document["processed_path"]
 
+        existing_chunks = db.list_chunks(document_id=document_id)
+        if existing_chunks and not reset_chunks:
+            skipped_documents += 1
+            print(f"[skipped] document {document_id}: chunks already exist")
+            continue
+
+        processed_path_value = document["processed_path"]
         if not processed_path_value:
             failed_documents += 1
             print(f"[failed] document {document_id}: missing processed_path")
             continue
 
-        processed_path = Path(processed_path_value)
+        processed_path = resolve_project_path(processed_path_value)
+        if processed_path is None:
+            failed_documents += 1
+            print(f"[failed] document {document_id}: missing processed_path")
+            continue
+
         if not processed_path.exists():
             failed_documents += 1
             print(f"[failed] document {document_id}: file not found: {processed_path}")
             continue
 
-        existing_chunks = db.list_chunks(document_id=document_id)
-        if existing_chunks and not args.reset_chunks:
-            skipped_documents += 1
-            print(f"[skipped] document {document_id}: chunks already exist")
-            continue
-
         try:
-            chunks = chunk_file(
+            chunks = chunk_file_func(
                 processed_path,
-                chunk_size=args.chunk_size,
-                overlap=args.overlap,
+                chunk_size=chunk_size,
+                overlap=overlap,
             )
             if not chunks:
                 failed_documents += 1
@@ -122,15 +159,12 @@ def main() -> None:
             failed_documents += 1
             print(f"[failed] document {document_id}: {exc}")
 
-    print()
-    print("Document chunking summary")
-    print(f"Documents considered: {len(documents)}")
-    print(f"Chunked documents: {chunked_documents}")
-    print(f"Skipped documents: {skipped_documents}")
-    print(f"Failed documents: {failed_documents}")
-    print(f"Chunks deleted: {deleted_chunks}")
-    print(f"Chunks created: {chunks_created}")
-    print(f"Database path: {db.db_path}")
+    return {
+        "chunked_documents": chunked_documents,
+        "skipped_documents": skipped_documents,
+        "failed_documents": failed_documents,
+        "chunks_created": chunks_created,
+    }
 
 
 if __name__ == "__main__":

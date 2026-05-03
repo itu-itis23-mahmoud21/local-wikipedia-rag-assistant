@@ -286,6 +286,99 @@ class MetadataDB:
 
         return document_id
 
+    def upsert_document_for_entity(
+        self,
+        entity_id: int,
+        title: str,
+        source_url: str | None,
+        raw_path: str | None,
+        processed_path: str | None,
+        status: str,
+        error_message: str | None = None,
+    ) -> int:
+        """Create or update the latest document row for an entity.
+
+        This keeps repeated ingestion runs idempotent without changing the
+        simple homework schema or adding a migration.
+        """
+
+        _validate_name(title, field_name="title")
+        _validate_status(status)
+        now = _utc_now()
+
+        with closing(self.connect()) as connection:
+            existing_row = connection.execute(
+                """
+                SELECT id
+                FROM documents
+                WHERE entity_id = ?
+                ORDER BY id DESC
+                LIMIT 1;
+                """,
+                (entity_id,),
+            ).fetchone()
+
+            if existing_row is None:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO documents (
+                        entity_id,
+                        title,
+                        source_url,
+                        raw_path,
+                        processed_path,
+                        status,
+                        error_message,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    """,
+                    (
+                        entity_id,
+                        title.strip(),
+                        source_url,
+                        raw_path,
+                        processed_path,
+                        status.strip(),
+                        error_message,
+                        now,
+                        now,
+                    ),
+                )
+                document_id = _lastrowid_to_int(
+                    cursor.lastrowid,
+                    "creating document",
+                )
+            else:
+                document_id = int(existing_row["id"])
+                connection.execute(
+                    """
+                    UPDATE documents
+                    SET title = ?,
+                        source_url = ?,
+                        raw_path = ?,
+                        processed_path = ?,
+                        status = ?,
+                        error_message = ?,
+                        updated_at = ?
+                    WHERE id = ?;
+                    """,
+                    (
+                        title.strip(),
+                        source_url,
+                        raw_path,
+                        processed_path,
+                        status.strip(),
+                        error_message,
+                        now,
+                        document_id,
+                    ),
+                )
+            connection.commit()
+
+        return document_id
+
     def update_document_status(
         self,
         document_id: int,

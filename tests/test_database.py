@@ -118,6 +118,41 @@ class TestMetadataDB(unittest.TestCase):
         self.assertEqual(document["title"], "Nikola Tesla")
         self.assertEqual(document["status"], "success")
 
+    def test_upsert_document_for_entity_updates_latest_document(self) -> None:
+        """Repeated ingestion should update one document row for an entity."""
+
+        entity_id = self.db.upsert_entity("Nikola Tesla", "person")
+        first_document_id = self.db.upsert_document_for_entity(
+            entity_id=entity_id,
+            title="Nikola Tesla",
+            source_url="https://old.example/tesla",
+            raw_path="data/raw/person/nikola_tesla.txt",
+            processed_path="data/processed/person/nikola_tesla.txt",
+            status="failed",
+            error_message="old failure",
+        )
+        second_document_id = self.db.upsert_document_for_entity(
+            entity_id=entity_id,
+            title="Nikola Tesla",
+            source_url="https://en.wikipedia.org/wiki/Nikola_Tesla",
+            raw_path="data/raw/person/nikola_tesla.txt",
+            processed_path="data/processed/person/nikola_tesla.txt",
+            status="success",
+            error_message=None,
+        )
+
+        documents = self.db.list_documents()
+        document = _require_row(self.db.get_document(first_document_id))
+
+        self.assertEqual(first_document_id, second_document_id)
+        self.assertEqual(len(documents), 1)
+        self.assertEqual(document["status"], "success")
+        self.assertIsNone(document["error_message"])
+        self.assertEqual(
+            document["source_url"],
+            "https://en.wikipedia.org/wiki/Nikola_Tesla",
+        )
+
     def test_update_document_status_works(self) -> None:
         """Document status updates should persist."""
 

@@ -14,6 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from src import config
 from src.database import MetadataDB
 from src.entities import get_people, get_places
+from src.utils import serialize_project_path
 from src.wiki_client import (
     WikipediaClient,
     WikipediaClientError,
@@ -111,12 +112,12 @@ def main() -> None:
                 entity_type,
                 source_url=source_url,
             )
-            db.create_document(
+            db.upsert_document_for_entity(
                 entity_id=entity_id,
                 title=entity_name,
                 source_url=source_url,
-                raw_path=str(raw_path) if raw_path.exists() else None,
-                processed_path=str(processed_path),
+                raw_path=serialize_project_path(raw_path) if raw_path.exists() else None,
+                processed_path=serialize_project_path(processed_path),
                 status="success",
                 error_message="Skipped because processed file already exists.",
             )
@@ -136,23 +137,23 @@ def main() -> None:
                 entity_type,
                 source_url=page.source_url,
             )
-            db.create_document(
+            db.upsert_document_for_entity(
                 entity_id=entity_id,
                 title=page.title,
                 source_url=page.source_url,
-                raw_path=str(raw_path),
-                processed_path=str(processed_path),
+                raw_path=serialize_project_path(raw_path),
+                processed_path=serialize_project_path(processed_path),
                 status="success",
             )
             successful += 1
             print(f"[success] {entity_type}: {entity_name}")
         except WikipediaClientError as exc:
-            db.create_document(
+            db.upsert_document_for_entity(
                 entity_id=entity_id,
                 title=entity_name,
                 source_url=existing_source_url,
-                raw_path=str(raw_path),
-                processed_path=str(processed_path),
+                raw_path=serialize_project_path(raw_path),
+                processed_path=serialize_project_path(processed_path),
                 status="failed",
                 error_message=str(exc),
             )

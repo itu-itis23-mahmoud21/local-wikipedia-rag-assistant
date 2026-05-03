@@ -534,7 +534,7 @@ def render_copy_button(label: str, text: str, key: str) -> None:
 
 
 def _render_html_iframe(markup: str, height: int) -> None:
-    """Render inline HTML in an iframe without using deprecated Streamlit APIs."""
+    """Render inline HTML in an iframe."""
 
     st.iframe(markup, height=height)
 

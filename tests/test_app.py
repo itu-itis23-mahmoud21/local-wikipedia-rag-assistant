@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 from app import (
     answer_to_chat_message,
@@ -21,6 +22,7 @@ from app import (
     initialize_session_state,
     is_generation_active,
     normalize_source,
+    _render_html_iframe,
     set_random_prompt_in_chat_input,
     start_generation,
     stop_generation,
@@ -286,6 +288,17 @@ class TestAppHelpers(unittest.TestCase):
         """Context copy text should be stripped safely."""
 
         self.assertEqual(format_context_for_copy("  Context text. \n"), "Context text.")
+
+    def test_render_html_iframe_uses_st_iframe_for_markup(self) -> None:
+        """Inline HTML markup should be rendered through st.iframe."""
+
+        with patch("app.st.iframe", create=True) as mock_iframe:
+            _render_html_iframe("<button>Copy</button>", height=42)
+
+        mock_iframe.assert_called_once_with(
+            "<button>Copy</button>",
+            height=42,
+        )
 
     def test_answer_to_chat_message_converts_generated_answer(self) -> None:
         """GeneratedAnswer should become an assistant chat message."""
