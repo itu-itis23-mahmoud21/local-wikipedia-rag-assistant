@@ -379,4 +379,4 @@ ollama ps
 
 ## 🎬 Demo Video
 
-Demo video link: TODO - add Loom or unlisted YouTube link before submission.
+Demo video link: [Youtube Link - Unlisted](https://youtu.be/vWHUtc4PYHs)
